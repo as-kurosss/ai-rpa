@@ -17,5 +17,5 @@ pub use click_tool::ClickTool;
 pub use type_tool::TypeTool;
 pub use selector_recorder::{SelectorRecorder, RecordedSelector, SelectorStep, ElementProperties};
 pub use highlight::{HighlightConfig, highlight_element, highlight_element_animated, highlight_selector_tree};
-pub use highlight_overlay::{draw_highlight_rect_async, draw_highlight_rect_blocking, draw_highlight_rect_animated};
+pub use highlight_overlay::{draw_highlight_rect_async, draw_highlight_rect_blocking, draw_highlight_rect_animated, draw_highlight_rect_track_cursor};
 pub use app_launcher::{find_executable, launch_app, launch_app_and_wait, parse_app_arg};

@@ -135,6 +135,16 @@ impl SelectorRecorder {
         Ok(RecordedSelector { steps, depth })
     }
 
+    /// Захватывает переданный элемент и строит полный селектор
+    pub fn capture_element(&self, element: &UIElement) -> Result<RecordedSelector> {
+        // Строим полный путь от корня до элемента
+        let steps = self.build_full_selector_tree(element)?;
+
+        let depth = steps.len();
+
+        Ok(RecordedSelector { steps, depth })
+    }
+
     /// Получает UI элемент под текущей позицией курсора
     fn get_element_under_cursor(&self) -> Result<UIElement> {
         // Получаем курсор через Win32 API
