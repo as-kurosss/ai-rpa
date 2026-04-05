@@ -23,6 +23,9 @@
         /// По частичному вхождению в имя (гибче, чем Name)
         NameContains(String),
 
+        /// По Automation ID (самый надёжный для автоматизации)
+        AutomationId(String),
+
         /// Комбинация условий (ИЛИ)
         Or(Vec<Selector>),
     }
@@ -42,6 +45,7 @@
 
                 Selector::ControlType(control_type) => {
                     let element = automation.create_matcher()
+                        .from_ref(root)
                         .control_type(*control_type)
                         .find_first()
                         .map_err(|e| anyhow!("Element not found: control_type={:?}: {}", control_type, e))?;
@@ -59,6 +63,7 @@
                 Selector::NameContains(substring) => {
                     let all = automation.create_matcher()
                         .from_ref(root)
+                        .timeout(5000)
                         .find_all()
                         .map_err(|e| anyhow!("Failed to search elements: {}", e))?;
 
@@ -70,6 +75,23 @@
                         }
                     }
                     Err(anyhow!("Element not found: name contains '{}'", substring))
+                }
+
+                Selector::AutomationId(automation_id) => {
+                    let all = automation.create_matcher()
+                        .from_ref(root)
+                        .timeout(5000)
+                        .find_all()
+                        .map_err(|e| anyhow!("Failed to search elements: {}", e))?;
+
+                    for el in &all {
+                        if let Ok(id) = el.get_automation_id() {
+                            if id == *automation_id {
+                                return Ok(el.clone());
+                            }
+                        }
+                    }
+                    Err(anyhow!("Element not found: automation_id='{}'", automation_id))
                 }
 
                 Selector::Or(selectors) => {

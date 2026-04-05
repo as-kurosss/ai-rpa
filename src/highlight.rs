@@ -64,11 +64,12 @@ pub fn highlight_element_animated(element: &UIElement, flashes: u32) -> Result<(
 pub fn highlight_selector_tree(automation: &uiautomation::UIAutomation, steps: &[crate::SelectorStep]) -> Result<()> {
     println!("🌳 Подсветка дерева селектора ({} шагов)...", steps.len());
 
+    let root = automation.get_root_element()?;
+
     for (i, step) in steps.iter().enumerate() {
         println!("  Шаг {}/{}", i + 1, steps.len());
 
         if let Some(selector) = step.to_selector() {
-            let root = automation.get_root_element()?;
             if let Ok(element) = selector.find(automation, &root) {
                 let rect = element.get_bounding_rectangle().map_err(|e| anyhow!("{}", e))?;
                 draw_highlight_rect_blocking(rect.get_left(), rect.get_top(), rect.get_width(), rect.get_height(), 500);

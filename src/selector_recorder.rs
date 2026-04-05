@@ -40,11 +40,11 @@ impl SelectorStep {
     /// Преобразует шаг в Selector
     pub fn to_selector(&self) -> Option<Selector> {
         // Приоритет: automation_id (не пустой) > classname > control_type > name (не пустой)
-        
+
         // 1. Automation ID - самый надёжный, если не пустой
         if let Some(ref automation_id) = self.automation_id {
             if !automation_id.is_empty() {
-                return Some(Selector::Name(automation_id.clone()));
+                return Some(Selector::AutomationId(automation_id.clone()));
             }
         }
         
@@ -169,8 +169,14 @@ impl SelectorRecorder {
         // Создаем TreeWalker для обхода дерева
         let walker = self.automation.create_tree_walker()?;
 
+        const MAX_DEPTH: usize = 100;
+
         // Поднимаемся по дереву от элемента к корню
         loop {
+            if steps.len() >= MAX_DEPTH {
+                return Err(anyhow!("Selector tree exceeds maximum depth of {}", MAX_DEPTH));
+            }
+
             let step = SelectorStep::from_element(&self.automation, &current)?;
             steps.push(step);
 
@@ -258,4 +264,16 @@ fn get_cursor_position() -> Result<(i32, i32)> {
             .map_err(|e| anyhow!("Не удалось получить позицию курсора: {}", e))?;
     }
     Ok((point.x, point.y))
+}
+
+/// Проверяет, принадлежит ли элемент Electron-приложению (VSCode, Slack, Discord и т.д.)
+/// Electron использует classname "Chrome_WidgetWin_0", "Chrome_WidgetWin_1" и т.д.
+///
+/// Если элемент принадлежит Electron, UI Automation может не видеть внутренние элементы.
+/// Для таких приложений рекомендуется использовать веб-инструменты (Playwright, Spectron).
+pub fn is_electron_element(element: &uiautomation::UIElement) -> bool {
+    element.get_classname()
+        .ok()
+        .map(|name| name.starts_with("Chrome_WidgetWin_"))
+        .unwrap_or(false)
 }

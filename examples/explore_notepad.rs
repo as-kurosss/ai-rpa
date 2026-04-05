@@ -55,7 +55,8 @@ fn main() -> Result<()> {
     if let Ok(items) = all {
         for item in &items {
             if let Ok(name) = item.get_name() {
-                if name.to_lowercase().contains("сохран") || name.to_lowercase().contains("save") {
+                let lower = name.to_lowercase();
+                if lower.contains("сохран") || lower.contains("save") {
                     let ct = item.get_control_type().map(|c| format!("{:?}", c)).unwrap_or("?".into());
                     let class = item.get_classname().unwrap_or_default();
                     println!("  name='{}' | type={} | class='{}'", name, ct, class);

@@ -1,9 +1,11 @@
 // highlight_overlay.rs
 
+use std::sync::Once;
 use std::thread;
 use std::time::Duration;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 /// Толщина рамки подсветки в пикселях
@@ -12,8 +14,49 @@ const BORDER_THICKNESS: i32 = 3;
 /// Цвет рамки (COLORREF: 0x00BBGGRR)
 const GREEN_COLOR: COLORREF = COLORREF(0x00FF00);
 
+/// Базовый DPI (100% масштаб)
+const BASE_DPI: f32 = 96.0;
+
+/// Однократная инициализация DPI awareness
+static DPI_INIT: Once = Once::new();
+
+/// Делает процесс DPI-aware (вызывается автоматически при первом обращении)
+pub fn ensure_dpi_aware() {
+    DPI_INIT.call_once(|| {
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+    });
+}
+
+/// Получает текущий DPI экрана и возвращает масштаб
+/// Например: 120 DPI -> 1.25, 96 DPI -> 1.0
+/// Автоматически делает процесс DPI-aware при первом вызове
+pub fn get_dpi_scale() -> f32 {
+    ensure_dpi_aware();
+    let dpi = unsafe { GetDpiForSystem() };
+    if dpi == 0 {
+        return 1.0;
+    }
+    dpi as f32 / BASE_DPI
+}
+
+/// Масштабирует координаты из UI Automation (logical pixels) в physical pixels для GDI
+pub fn scale_rect(x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+    let scale = get_dpi_scale();
+    (
+        (x as f32 * scale) as i32,
+        (y as f32 * scale) as i32,
+        (w as f32 * scale) as i32,
+        (h as f32 * scale) as i32,
+    )
+}
+
 /// Рисует зелёную рамку поверх элемента прямо на экране
 /// Блокирует вызывающий поток на duration_ms миллисекунд
+/// Координаты принимаются в physical pixels (экранное разрешение).
+/// Если процесс DPI-aware (вызван ensure_dpi_aware), координаты от UI Automation
+/// уже в physical pixels — передавайте напрямую.
 pub fn draw_highlight_rect_blocking(x: i32, y: i32, width: i32, height: i32, duration_ms: u64) {
     unsafe {
         // Получаем DC всего экрана (None = desktop)
@@ -72,9 +115,30 @@ pub fn draw_highlight_rect_async(x: i32, y: i32, width: i32, height: i32, durati
 /// Рисует анимированную рамку с миганием (в отдельном потоке)
 pub fn draw_highlight_rect_animated(x: i32, y: i32, width: i32, height: i32, flashes: u32) {
     thread::spawn(move || {
-        for _i in 0..flashes {
+        for i in 0..flashes {
             draw_highlight_rect_blocking(x, y, width, height, 300);
-            thread::sleep(Duration::from_millis(200));
+
+            // Стираем рамку перед следующей вспышкой
+            let left = x - (BORDER_THICKNESS / 2) - 2;
+            let top = y - (BORDER_THICKNESS / 2) - 2;
+            let right = x + width + (BORDER_THICKNESS / 2) + 2;
+            let bottom = y + height + (BORDER_THICKNESS / 2) + 2;
+
+            let rect = RECT {
+                left,
+                top,
+                right,
+                bottom,
+            };
+
+            unsafe {
+                let _ = InvalidateRect(None, Some(&rect), false);
+            }
+
+            // Не ждём после последней вспышки
+            if i < flashes - 1 {
+                thread::sleep(Duration::from_millis(200));
+            }
         }
     });
 }
@@ -83,6 +147,8 @@ pub fn draw_highlight_rect_animated(x: i32, y: i32, width: i32, height: i32, fla
 /// Рамка остаётся, пока курсор находится в пределах элемента.
 /// Как только курсор уходит — рамка стирается.
 /// Блокирует вызывающий поток до тех пор, пока курсор не покинет элемент.
+/// Имеет таймаут 10 секунд для предотвращения бесконечного цикла.
+/// Координаты принимаются в physical pixels.
 pub fn draw_highlight_rect_track_cursor(x: i32, y: i32, width: i32, height: i32) {
     unsafe {
         // Создаём перо один раз
@@ -96,7 +162,15 @@ pub fn draw_highlight_rect_track_cursor(x: i32, y: i32, width: i32, height: i32)
         let mut last_old_pen = None;
         let mut last_old_brush = None;
 
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(10);
+
         loop {
+            // Таймаут для предотвращения бесконечного цикла
+            if start.elapsed() > timeout {
+                break;
+            }
+
             // Получаем текущую позицию курсора
             let mut point = POINT { x: 0, y: 0 };
             if GetCursorPos(&mut point).is_err() {
@@ -171,7 +245,7 @@ pub fn draw_highlight_rect_track_cursor(x: i32, y: i32, width: i32, height: i32)
             thread::sleep(Duration::from_millis(30));
         }
 
-        // Освобождаем перо
+        // Освобождаем перо в любом случае
         let _ = DeleteObject(pen.into());
     }
 }

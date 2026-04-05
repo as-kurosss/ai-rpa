@@ -5,6 +5,7 @@ use uiautomation::UIAutomation;
 use std::collections::HashMap;
 
 /// Контекст выполнения - общая память между шагами
+#[derive(Default)]
 pub struct ExecutionContext {
     /// Переменные, которые инструменты могут читать/писать
     pub variables: HashMap<String, serde_json::Value>,
@@ -15,10 +16,7 @@ pub struct ExecutionContext {
 
 impl ExecutionContext {
     pub fn new() -> Self {
-        Self {
-            variables: HashMap::new(),
-            log: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn log(&mut self, message: String) {

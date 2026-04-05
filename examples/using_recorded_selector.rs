@@ -4,8 +4,8 @@
 // для разработчиков и AI-агентов
 
 use ai_rpa::{
-    SelectorRecorder, ClickTool, TypeTool,
-    Selector, ExecutionContext
+    SelectorRecorder,
+    Selector,
 };
 use uiautomation::UIAutomation;
 use anyhow::Result;
@@ -118,6 +118,7 @@ fn example_auto_record() -> Result<()> {
 // ==========================================
 
 fn example_json_selector() -> Result<()> {
+    #[allow(unused_imports)]
     use std::fs;
 
     // Пример структуры для сохранения

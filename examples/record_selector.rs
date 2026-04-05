@@ -5,7 +5,7 @@
 // - Нажмите Ctrl для захвата селектора
 // - Программа выведет полное дерево селектора
 
-use ai_rpa::{SelectorRecorder, parse_app_arg, launch_app_and_wait};
+use ai_rpa::{SelectorRecorder, parse_app_arg, launch_app_and_wait, ensure_dpi_aware};
 use uiautomation::UIAutomation;
 use std::io::{self, Write};
 use std::thread;
@@ -15,6 +15,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::Foundation::{POINT, RECT, COLORREF};
 
 fn main() -> anyhow::Result<()> {
+    ensure_dpi_aware();
+
     println!("🎯 Запись селектора с подсветкой (аналог UIPath/SheRPA)");
     println!("════════════════════════════════════════════════════════");
     println!();
@@ -109,6 +111,7 @@ fn run_selector_recorder_loop(recorder: &SelectorRecorder) -> anyhow::Result<()>
         let mut hdc_screen: Option<windows::Win32::Graphics::Gdi::HDC> = None;
         let mut old_pen: Option<windows::Win32::Graphics::Gdi::HGDIOBJ> = None;
         let mut old_brush: Option<windows::Win32::Graphics::Gdi::HGDIOBJ> = None;
+        let mut last_redraw = std::time::Instant::now();
 
         use windows::Win32::Graphics::Gdi::*;
 
@@ -163,9 +166,11 @@ fn run_selector_recorder_loop(recorder: &SelectorRecorder) -> anyhow::Result<()>
             };
 
             if cursor_inside {
-                // Курсор на элементе — рисуем/обновляем рамку
-                if !is_drawn || cx != prev_x || cy != prev_y || cw != prev_w || ch != prev_h {
-                    // Стираем старую рамку
+                // Перерисовываем рамку каждые 200мс
+                let needs_refresh = last_redraw.elapsed().as_millis() > 200;
+
+                if !is_drawn || needs_refresh {
+                    // Стираем старую рамку, если она была
                     if is_drawn && hdc_screen.is_some() {
                         unsafe {
                             let hdc = hdc_screen.unwrap();
@@ -193,6 +198,7 @@ fn run_selector_recorder_loop(recorder: &SelectorRecorder) -> anyhow::Result<()>
 
                     prev_x = cx; prev_y = cy; prev_w = cw; prev_h = ch;
                     is_drawn = true;
+                    last_redraw = std::time::Instant::now();
                 }
             } else {
                 // Курсор ушёл — стираем
