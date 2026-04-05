@@ -1,4 +1,4 @@
-// click_tool.rs
+// type_tool.rs
 
 use crate::tool::{
     Tool,
@@ -8,28 +8,32 @@ use crate::selector::Selector;
 use anyhow::Result;
 use uiautomation::UIAutomation;
 
-/// Инструмент для клика по элементу UI
-pub struct ClickTool {
+/// Инструмент для ввода текста в элемент UI
+pub struct TypeTool {
     /// Селектор для поиска элемента
     pub selector: Selector,
+
+    /// Текст для ввода
+    pub text: String,
 
     /// Описание для пользователя (опционально)
     pub description: String,
 }
 
-impl ClickTool {
-    /// Создает новый инструмент с селектором
-    pub fn new(selector: Selector) -> Self {
+impl TypeTool {
+    /// Создает новый инструмент с селектором и текстом
+    pub fn new(selector: Selector, text: String) -> Self {
         Self {
             selector,
-            description: "Click on UI element".to_string(),
+            text,
+            description: "Type text into UI element".to_string(),
         }
     }
 }
 
-impl Tool for ClickTool {
+impl Tool for TypeTool {
     fn name(&self) -> &str {
-        "Click"
+        "Type"
     }
 
     fn description(&self) -> &str {
@@ -43,11 +47,14 @@ impl Tool for ClickTool {
         // 2. Ищем целевой элемент по селектору
         let element = self.selector.find(automation, &root)?;
 
-        // 3. Кликаем по элементу
+        // 3. Кликаем по элементу для фокуса
         element.click()?;
 
-        // 4. Логируем успешное действие в контекст
-        ctx.log(format!("✅ Clicked on element: {:?}", self.selector));
+        // 4. Вводим текст
+        element.send_text(&self.text, 42)?;
+
+        // 5. Логируем успешное действие в контекст
+        ctx.log(format!("✅ Typed '{}' into element: {:?}", self.text, self.selector));
 
         Ok(())
     }
