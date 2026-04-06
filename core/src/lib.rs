@@ -48,3 +48,8 @@ pub use selector_recorder::{SelectorRecorder, RecordedSelector, SelectorStep, El
 pub use highlight::{HighlightConfig, highlight_element, highlight_element_animated, highlight_selector_tree};
 pub use highlight_overlay::{draw_highlight_rect_async, draw_highlight_rect_blocking, draw_highlight_rect_animated, draw_highlight_rect_track_cursor, get_dpi_scale, scale_rect, ensure_dpi_aware};
 pub use app_launcher::{find_executable, launch_app, launch_app_and_wait, parse_app_arg};
+
+#[cfg(test)]
+mod tests {
+    // Тесты для type_tool находятся в core/tests/test_type_tool.rs
+}

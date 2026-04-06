@@ -24,3 +24,7 @@ windows = { version = "0.62", features = [
 [dev-dependencies]
 egui = "0.31"
 eframe = "0.31"
+
+[[test]]
+name = "test_type_tool"
+path = "tests/test_type_tool.rs"

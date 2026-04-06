@@ -150,7 +150,7 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 };
 
                 // Для инструментов, требующих селектор
-                let selector = if matches!(tool_name, "Click" | "TypeText" | "ExtractText" | "WaitForElement"
+                let selector = if matches!(tool_name, "Click" | "Type" | "ExtractText" | "WaitForElement"
                     | "DoubleClick" | "RightClick" | "MoveMouse" | "DragAndDrop" | "Condition" | "Retry" | "Screenshot") {
                     let sel_str = step.config.get("selector").cloned().unwrap_or_default();
                     match parse_selector(&sel_str) {
