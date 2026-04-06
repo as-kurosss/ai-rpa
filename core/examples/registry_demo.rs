@@ -54,10 +54,12 @@ fn main() -> Result<()> {
 
     // 5. Ввод текста в поле "Имя файла"
     println!("\n⌨️  ШАГ 3: Ввод текста в поле 'Имя файла'");
-    match registry.execute_tool_with_text(
+    let mut type_config = std::collections::HashMap::new();
+    type_config.insert("text".to_string(), "привет_мир.txt".to_string());
+    match registry.execute_tool_with_config(
         "Type",
         Selector::NameContains("Имя".to_string()),
-        "привет_мир.txt",
+        &type_config,
         &automation,
         &mut context,
     ) {

@@ -321,7 +321,9 @@ impl RpaApp {
 
                         match parse_selector(selector_str) {
                             Ok(sel) => {
-                                match registry.execute_tool_with_text("Type", sel, text, &automation, &mut ctx) {
+                                let mut type_config = std::collections::HashMap::new();
+                                type_config.insert("text".to_string(), text.to_string());
+                                match registry.execute_tool_with_config("Type", sel, &type_config, &automation, &mut ctx) {
                                     Ok(()) => {
                                         let _ = tx.send("      ✓ Ввод выполнен".to_string());
                                     }
