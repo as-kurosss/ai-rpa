@@ -1,12 +1,29 @@
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { BlockType, BLOCK_LABELS, BLOCK_ICONS } from '../types';
-import { dragStore } from '../store/dragStore';
 
 interface BlockPaletteProps {
   blockCount: number;
 }
 
 const ALL_BLOCKS: BlockType[] = ['LaunchApp', 'Click', 'TypeText'];
+
+// Global drag state shared between BlockPalette and FlowCanvas
+export const dragState = {
+  blockType: null as BlockType | null,
+  isDragging: false,
+  listeners: [] as ((isDragging: boolean) => void)[],
+  set(type: BlockType | null) {
+    this.blockType = type;
+    this.isDragging = type !== null;
+    this.listeners.forEach(fn => fn(this.isDragging));
+  },
+  subscribe(fn: (isDragging: boolean) => void) {
+    this.listeners.push(fn);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== fn);
+    };
+  },
+};
 
 export function BlockPalette({ blockCount }: BlockPaletteProps) {
   const [search, setSearch] = useState('');
@@ -15,11 +32,9 @@ export function BlockPalette({ blockCount }: BlockPaletteProps) {
     search === '' || BLOCK_LABELS[bt].toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleDragStart = (bt: BlockType, event: React.DragEvent) => {
-    dragStore.set(bt);
-    event.dataTransfer.effectAllowed = 'move';
-    // Небольшой сдвиг чтобы курсор был по центру
-    event.dataTransfer.setDragImage(new Image(), 0, 0);
+  const onPointerDown = (blockType: BlockType) => {
+    dragState.set(blockType);
+    console.log('[BlockPalette] pointerDown:', blockType);
   };
 
   return (
@@ -48,13 +63,12 @@ export function BlockPalette({ blockCount }: BlockPaletteProps) {
         {filtered.map(bt => (
           <div
             key={bt}
-            draggable
-            onDragStart={(e) => handleDragStart(bt, e)}
+            onPointerDown={() => onPointerDown(bt)}
             className="
               flex items-center gap-2 px-2 py-1.5 rounded-md cursor-grab
               bg-[#f0f0f0] border border-[#c8c8c8]
               hover:bg-[#e6e6e6] hover:border-[#a0a0a0]
-              active:cursor-grabbing
+              active:cursor-grabbing select-none touch-none
             "
           >
             <span className="text-base">{BLOCK_ICONS[bt]}</span>

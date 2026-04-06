@@ -5,8 +5,7 @@ import { BlockPalette } from './components/BlockPalette';
 import { FlowCanvas } from './components/FlowCanvas';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { LogPanel } from './components/LogPanel';
-import { BlockType, createDefaultConfig } from './types';
-import { dragStore } from './store/dragStore';
+import { BlockType } from './types';
 
 // Начальные демо-блоки
 function createInitialNodes(): Node[] {
@@ -54,10 +53,6 @@ export default function App() {
     (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
-
-  const handleDragStart = useCallback((blockType: BlockType, _event: React.DragEvent) => {
-    dragStore.set(blockType);
-  }, []);
 
   const handleUpdateNode = useCallback((nodeId: string, updates: { position?: { x: number; y: number }; data?: Record<string, unknown> }) => {
     setNodes((nds) =>
