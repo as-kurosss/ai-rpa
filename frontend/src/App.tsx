@@ -6,6 +6,7 @@ import { FlowCanvas } from './components/FlowCanvas';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { LogPanel } from './components/LogPanel';
 import { BlockType } from './types';
+import { executeScenario, stopExecution, type ScenarioStep } from './tauri';
 
 // Начальные демо-блоки
 function createInitialNodes(): Node[] {
@@ -80,23 +81,44 @@ export default function App() {
     });
   }, []);
 
-  const handleRun = useCallback(() => {
-    setIsRunning(true);
-    setLogs((prev) => [...prev, '▶ Запуск сценария...']);
+  const handleRun = useCallback(async () => {
+    if (nodes.length === 0) {
+      setLogs((prev) => [...prev, '⚠ Нет блоков для выполнения']);
+      return;
+    }
 
-    const steps = nodes.map((n) => ({
+    setIsRunning(true);
+    setLogs([]);
+
+    // Сортируем ноды по Y — порядок выполнения сверху вниз
+    const sorted = [...nodes].sort(
+      (a, b) => (a.position.y || 0) - (b.position.y || 0)
+    );
+
+    const steps: ScenarioStep[] = sorted.map((n) => ({
       type: (n.data as { blockType?: string }).blockType || 'unknown',
-      config: (n.data as { config?: Record<string, string> }).config || {},
+      config: Object.fromEntries(
+        Object.entries((n.data as { config?: Record<string, unknown> }).config || {}).map(
+          ([k, v]) => [k, String(v)]
+        )
+      ),
     }));
-    setLogs((prev) => [...prev, `  Блоков: ${steps.length}`]);
-    steps.forEach((s, i) => {
-      setLogs((prev) => [...prev, `  [${i + 1}] ${s.type}: ${JSON.stringify(s.config)}`]);
-    });
-    setLogs((prev) => [...prev, '✓ Сценарий завершён']);
-    setIsRunning(false);
+
+    try {
+      const result = await executeScenario(steps);
+      setLogs(result.log);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLogs((prev) => [...prev, `❌ Ошибка: ${msg}`]);
+    } finally {
+      setIsRunning(false);
+    }
   }, [nodes]);
 
-  const handleStop = useCallback(() => {
+  const handleStop = useCallback(async () => {
+    try {
+      await stopExecution();
+    } catch { /* ignore */ }
     setIsRunning(false);
     setLogs((prev) => [...prev, '⏹ Сценарий остановлен']);
   }, []);
