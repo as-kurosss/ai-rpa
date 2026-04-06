@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use crate::ClickTool;
 use crate::TypeTool;
+use crate::CloseTool;
+use crate::ExtractTool;
 use crate::tool::{
     Tool,
     ExecutionContext
@@ -35,6 +37,26 @@ impl ToolRegistry {
                 .cloned()
                 .unwrap_or_default();
             Ok(Box::new(TypeTool::new(selector, text)))
+        }));
+
+        registry.register("CloseApp".to_string(), Box::new(|_selector, config| {
+            let process_name = config.get("process_name")
+                .cloned()
+                .unwrap_or_default();
+            let force = config.get("force")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
+            let timeout_ms = config.get("timeout_ms")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(3000);
+            Ok(Box::new(CloseTool::new(process_name, force, timeout_ms)))
+        }));
+
+        registry.register("ExtractText".to_string(), Box::new(|selector, config| {
+            let var_name = config.get("var_name")
+                .cloned()
+                .unwrap_or_else(|| "extracted_text".to_string());
+            Ok(Box::new(ExtractTool::new(selector, var_name)))
         }));
 
         registry

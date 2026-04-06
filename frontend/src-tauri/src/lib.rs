@@ -107,6 +107,54 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                     }
                 }
             }
+            "ExtractText" => {
+                let selector_str = step.config.get("selector").cloned().unwrap_or_default();
+                let var_name = step.config.get("var_name").cloned().unwrap_or_else(|| "extracted_text".to_string());
+                logs.push(format!("  [{step_num}] 📄 Извлечение текста → ${}", var_name));
+
+                if let Ok(selector) = parse_selector(&selector_str) {
+                    let mut type_config = std::collections::HashMap::new();
+                    type_config.insert("var_name".to_string(), var_name.clone());
+                    match registry.execute_tool_with_config("ExtractText", selector, &type_config, &automation, &mut ctx) {
+                        Ok(()) => {
+                            if let Some(val) = ctx.variables.get(&var_name) {
+                                logs.push(format!("      ✓ Текст: \"{}\"", val.as_str().unwrap_or("?")));
+                            } else {
+                                logs.push("      ✓ Текст извлечён".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            logs.push(format!("      ❌ {}", e));
+                        }
+                    }
+                } else {
+                    logs.push(format!("      ❌ Невалидный селектор: {}", selector_str));
+                }
+            }
+            "CloseApp" => {
+                let process_name = step.config.get("process_name").cloned().unwrap_or_default();
+                let force = step.config.get("force").map(|v| v == "true").unwrap_or(false);
+                logs.push(format!("  [{step_num}] 🛑 Закрытие: {}{}", process_name, if force { " (force)" } else { "" }));
+
+                let mut type_config = std::collections::HashMap::new();
+                type_config.insert("process_name".to_string(), process_name.clone());
+                type_config.insert("force".to_string(), force.to_string());
+                // Пустой селектор — не используется CloseTool
+                match registry.execute_tool_with_config(
+                    "CloseApp",
+                    Selector::Classname("unused".to_string()),
+                    &type_config,
+                    &automation,
+                    &mut ctx,
+                ) {
+                    Ok(()) => {
+                        logs.push(format!("      ✓ '{}' закрыт", process_name));
+                    }
+                    Err(e) => {
+                        logs.push(format!("      ❌ {}", e));
+                    }
+                }
+            }
             "Click" => {
                 let selector_str = step.config.get("selector").cloned().unwrap_or_default();
                 logs.push(format!("  [{step_num}] 🖱 Клик: {}", selector_str));
