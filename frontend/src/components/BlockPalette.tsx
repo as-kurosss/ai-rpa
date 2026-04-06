@@ -5,7 +5,14 @@ interface BlockPaletteProps {
   blockCount: number;
 }
 
-const ALL_BLOCKS: BlockType[] = ['LaunchApp', 'Click', 'TypeText', 'CloseApp', 'ExtractText'];
+const ALL_BLOCKS: BlockType[] = [
+  'LaunchApp', 'CloseApp',
+  'Click', 'DoubleClick', 'RightClick', 'MoveMouse', 'DragAndDrop',
+  'TypeText', 'KeyPress',
+  'ExtractText', 'Screenshot',
+  'Wait', 'WaitForElement', 'Retry', 'Condition',
+  'ReadFile', 'WriteFile',
+];
 
 // Global drag state shared between BlockPalette and FlowCanvas
 export const dragState = {

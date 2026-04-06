@@ -67,7 +67,6 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
     EXECUTION_STOPPED.store(false, Ordering::SeqCst);
     let mut logs: Vec<String> = vec!["▶ Запуск сценария...".to_string()];
 
-    // RAII — CoUninitialize вызовется автоматически при выходе из функции.
     let _com = ComGuard::new()?;
 
     let automation = uiautomation::UIAutomation::new_direct().map_err(|e| e.to_string())?;
@@ -107,30 +106,6 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                     }
                 }
             }
-            "ExtractText" => {
-                let selector_str = step.config.get("selector").cloned().unwrap_or_default();
-                let var_name = step.config.get("var_name").cloned().unwrap_or_else(|| "extracted_text".to_string());
-                logs.push(format!("  [{step_num}] 📄 Извлечение текста → ${}", var_name));
-
-                if let Ok(selector) = parse_selector(&selector_str) {
-                    let mut type_config = std::collections::HashMap::new();
-                    type_config.insert("var_name".to_string(), var_name.clone());
-                    match registry.execute_tool_with_config("ExtractText", selector, &type_config, &automation, &mut ctx) {
-                        Ok(()) => {
-                            if let Some(val) = ctx.variables.get(&var_name) {
-                                logs.push(format!("      ✓ Текст: \"{}\"", val.as_str().unwrap_or("?")));
-                            } else {
-                                logs.push("      ✓ Текст извлечён".to_string());
-                            }
-                        }
-                        Err(e) => {
-                            logs.push(format!("      ❌ {}", e));
-                        }
-                    }
-                } else {
-                    logs.push(format!("      ❌ Невалидный селектор: {}", selector_str));
-                }
-            }
             "CloseApp" => {
                 let process_name = step.config.get("process_name").cloned().unwrap_or_default();
                 let force = step.config.get("force").map(|v| v == "true").unwrap_or(false);
@@ -139,59 +114,81 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 let mut type_config = std::collections::HashMap::new();
                 type_config.insert("process_name".to_string(), process_name.clone());
                 type_config.insert("force".to_string(), force.to_string());
-                // Пустой селектор — не используется CloseTool
                 match registry.execute_tool_with_config(
                     "CloseApp",
-                    Selector::Classname("unused".to_string()),
+                    Selector::Classname("_".to_string()),
                     &type_config,
                     &automation,
                     &mut ctx,
                 ) {
+                    Ok(()) => { logs.push(format!("      ✓ '{}' закрыт", process_name)); }
+                    Err(e) => { logs.push(format!("      ❌ {}", e)); }
+                }
+            }
+            _ => {
+                // Все остальные инструменты обрабатываются через registry
+                let tool_name = match step.step_type.as_str() {
+                    "Click" => "Click",
+                    "TypeText" => "Type",
+                    "ExtractText" => "ExtractText",
+                    "Wait" => "Wait",
+                    "WaitForElement" => "WaitForElement",
+                    "DoubleClick" => "DoubleClick",
+                    "RightClick" => "RightClick",
+                    "KeyPress" => "KeyPress",
+                    "MoveMouse" => "MoveMouse",
+                    "DragAndDrop" => "DragAndDrop",
+                    "Condition" => "Condition",
+                    "Retry" => "Retry",
+                    "ReadFile" => "ReadFile",
+                    "WriteFile" => "WriteFile",
+                    "Screenshot" => "Screenshot",
+                    other => {
+                        logs.push(format!("  [{step_num}] ❓ Неизвестный тип: {}", other));
+                        continue;
+                    }
+                };
+
+                // Для инструментов, требующих селектор
+                let selector = if matches!(tool_name, "Click" | "TypeText" | "ExtractText" | "WaitForElement"
+                    | "DoubleClick" | "RightClick" | "MoveMouse" | "DragAndDrop" | "Condition" | "Retry" | "Screenshot") {
+                    let sel_str = step.config.get("selector").cloned().unwrap_or_default();
+                    match parse_selector(&sel_str) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            logs.push(format!("  [{step_num}] ❌ {}", e));
+                            continue;
+                        }
+                    }
+                } else {
+                    Selector::Classname("_".to_string())
+                };
+
+                let label = step.config.get("selector")
+                    .or_else(|| step.config.get("keys"))
+                    .or_else(|| step.config.get("file_path"))
+                    .or_else(|| step.config.get("duration_ms"))
+                    .map(|v| v.as_str())
+                    .unwrap_or(tool_name);
+                logs.push(format!("  [{step_num}] {} {}", get_emoji(tool_name), label));
+
+                match registry.execute_tool_with_config(tool_name, selector, &step.config, &automation, &mut ctx) {
                     Ok(()) => {
-                        logs.push(format!("      ✓ '{}' закрыт", process_name));
+                        if let Some(v) = ctx.variables.values().last() {
+                            let s = v.as_str().unwrap_or("?");
+                            if s.len() < 200 {
+                                logs.push(format!("      ✓ {}", s));
+                            } else {
+                                logs.push("      ✓".to_string());
+                            }
+                        } else {
+                            logs.push(format!("      ✓ {}", tool_name));
+                        }
                     }
                     Err(e) => {
                         logs.push(format!("      ❌ {}", e));
                     }
                 }
-            }
-            "Click" => {
-                let selector_str = step.config.get("selector").cloned().unwrap_or_default();
-                logs.push(format!("  [{step_num}] 🖱 Клик: {}", selector_str));
-
-                if let Ok(selector) = parse_selector(&selector_str) {
-                    match registry.execute_tool_with_config("Click", selector, &step.config, &automation, &mut ctx) {
-                        Ok(()) => {
-                            logs.push("      ✓ Клик выполнен".to_string());
-                        }
-                        Err(e) => {
-                            logs.push(format!("      ❌ {}", e));
-                        }
-                    }
-                } else {
-                    logs.push(format!("      ❌ Невалидный селектор: {}", selector_str));
-                }
-            }
-            "TypeText" => {
-                let selector_str = step.config.get("selector").cloned().unwrap_or_default();
-                let text = step.config.get("text").cloned().unwrap_or_default();
-                logs.push(format!("  [{step_num}] ⌨ Ввод: \"{}\"", text));
-
-                if let Ok(selector) = parse_selector(&selector_str) {
-                    match registry.execute_tool_with_config("Type", selector, &step.config, &automation, &mut ctx) {
-                        Ok(()) => {
-                            logs.push("      ✓ Ввод выполнен".to_string());
-                        }
-                        Err(e) => {
-                            logs.push(format!("      ❌ {}", e));
-                        }
-                    }
-                } else {
-                    logs.push(format!("      ❌ Невалидный селектор: {}", selector_str));
-                }
-            }
-            other => {
-                logs.push(format!("  [{step_num}] ❓ Неизвестный тип: {}", other));
             }
         }
     }
@@ -206,7 +203,27 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
     };
 
     Ok(result)
-    // _com.drop() вызывается здесь — CoUninitialize
+}
+
+fn get_emoji(tool: &str) -> &'static str {
+    match tool {
+        "Click" => "🖱",
+        "Type" => "⌨",
+        "ExtractText" => "📄",
+        "Wait" => "⏳",
+        "WaitForElement" => "⏱",
+        "DoubleClick" => "🖱🖱",
+        "RightClick" => "🖱R",
+        "KeyPress" => "⌨️",
+        "MoveMouse" => "🔹",
+        "DragAndDrop" => "↔️",
+        "Condition" => "🔍",
+        "Retry" => "🔄",
+        "ReadFile" => "📖",
+        "WriteFile" => "📝",
+        "Screenshot" => "📸",
+        _ => "⚙",
+    }
 }
 
 #[tauri::command]

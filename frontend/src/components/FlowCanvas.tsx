@@ -22,7 +22,14 @@ import { dragState } from './BlockPalette';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: Record<string, any> = { block: BlockNode };
 
-const VALID_BLOCKS = ['LaunchApp', 'Click', 'TypeText'];
+const VALID_BLOCKS: BlockType[] = [
+  'LaunchApp', 'CloseApp',
+  'Click', 'DoubleClick', 'RightClick', 'MoveMouse', 'DragAndDrop',
+  'TypeText', 'KeyPress',
+  'ExtractText', 'Screenshot',
+  'Wait', 'WaitForElement', 'Retry', 'Condition',
+  'ReadFile', 'WriteFile',
+];
 
 interface FlowCanvasContentProps {
   nodes: Node[];
