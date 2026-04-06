@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::State;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED};
 
 use ai_rpa::tool::ExecutionContext;
 use ai_rpa::tool_registry::ToolRegistry;
@@ -32,26 +33,44 @@ pub struct ExecutionResult {
     pub log: Vec<String>,
 }
 
+// ─── COM RAII Guard ───────────────────────────────────────────
+
+/// Гарантирует CoUninitialize при выходе из scope — даже при early return или panic.
+struct ComGuard;
+
+impl ComGuard {
+    fn new() -> Result<Self, String> {
+        // Пробуем STA — UI Automation работает и в STA.
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr.is_ok() {
+            return Ok(ComGuard);
+        }
+        // Если уже инициализирован с другим режимом — пробуем MTA.
+        let hr2 = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if hr2.is_ok() {
+            return Ok(ComGuard);
+        }
+        Err(format!("CoInitializeEx failed: STA=0x{:08X}, MTA=0x{:08X}",
+            hr.0 as u32, hr2.0 as u32))
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize(); }
+    }
+}
+
 // ─── Tauri Commands ───────────────────────────────────────────
 
 fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
     EXECUTION_STOPPED.store(false, Ordering::SeqCst);
     let mut logs: Vec<String> = vec!["▶ Запуск сценария...".to_string()];
 
-    // CoInitializeEx для STA — Tauri команды запускаются на MTA потоках,
-    // а UI Automation требует STA.
-    unsafe {
-        let hr = windows::Win32::System::Com::CoInitializeEx(
-            None,
-            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-        );
-        // S_OK или S_FALSE (уже инициализировано) — оба OK
-        if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
-            return Err(format!("CoInitializeEx failed: {hr:?}"));
-        }
-    }
+    // RAII — CoUninitialize вызовется автоматически при выходе из функции.
+    let _com = ComGuard::new()?;
 
-    let automation = uiautomation::UIAutomation::new().map_err(|e| e.to_string())?;
+    let automation = uiautomation::UIAutomation::new_direct().map_err(|e| e.to_string())?;
     let registry = ToolRegistry::new();
     let mut ctx = ExecutionContext::new();
 
@@ -93,7 +112,7 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 logs.push(format!("  [{step_num}] 🖱 Клик: {}", selector_str));
 
                 if let Ok(selector) = parse_selector(&selector_str) {
-                    match registry.execute_tool("Click", selector, &automation, &mut ctx) {
+                    match registry.execute_tool_with_config("Click", selector, &step.config, &automation, &mut ctx) {
                         Ok(()) => {
                             logs.push("      ✓ Клик выполнен".to_string());
                         }
@@ -111,7 +130,7 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 logs.push(format!("  [{step_num}] ⌨ Ввод: \"{}\"", text));
 
                 if let Ok(selector) = parse_selector(&selector_str) {
-                    match registry.execute_tool_with_text("Type", selector, &text, &automation, &mut ctx) {
+                    match registry.execute_tool_with_config("Type", selector, &step.config, &automation, &mut ctx) {
                         Ok(()) => {
                             logs.push("      ✓ Ввод выполнен".to_string());
                         }
@@ -138,28 +157,21 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
         log: logs.clone(),
     };
 
-    // CoUninitialize — освобождаем COM на этом потоке
-    unsafe {
-        windows::Win32::System::Com::CoUninitialize();
-    }
-
     Ok(result)
+    // _com.drop() вызывается здесь — CoUninitialize
 }
 
 #[tauri::command]
-fn execute_scenario(steps: Vec<ScenarioStep>, state: State<AppState>) -> Result<ExecutionResult, String> {
-    let (tx, rx) = std::sync::mpsc::channel::<Result<ExecutionResult, String>>();
+async fn execute_scenario(
+    steps: Vec<ScenarioStep>,
+    state: State<'_, AppState>,
+) -> Result<ExecutionResult, String> {
+    // spawn_blocking — не блокирует Tauri event loop, UI остаётся отзывчивым.
+    let result = tokio::task::spawn_blocking(move || run_scenario(steps))
+        .await
+        .map_err(|e| format!("Execution panicked: {}", e))??;
 
-    std::thread::spawn(move || {
-        let result = run_scenario(steps);
-        let _ = tx.send(result);
-    });
-
-    let result = rx.recv().map_err(|_| "Execution thread panicked")??;
-
-    // Сохраняем логи в AppState
     *state.logs.lock().unwrap() = result.log.clone();
-
     Ok(result)
 }
 
@@ -171,6 +183,7 @@ fn stop_execution() {
 #[tauri::command]
 fn highlight_element(selector: String) -> Result<(), String> {
     // Подсветка элемента через GDI overlay
+    // CoInitializeEx вызывается внутри UIAutomation::new()
     let automation = uiautomation::UIAutomation::new().map_err(|e| e.to_string())?;
     let root = automation.get_root_element().map_err(|e| e.to_string())?;
 
@@ -184,6 +197,7 @@ fn highlight_element(selector: String) -> Result<(), String> {
                     rect.get_height(),
                     2000,
                 );
+                // COM освободится при завершении потока Tauri
                 return Ok(());
             }
         }

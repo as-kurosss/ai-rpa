@@ -65,8 +65,8 @@ export function PropertiesPanel({
             <label className="text-xs text-gray-400">X:</label>
             <input
               type="number"
-              value={Math.round(selectedNode.position.x)}
-              onChange={e => onUpdateNode(selectedNode.id, {
+              defaultValue={Math.round(selectedNode.position.x)}
+              onBlur={e => onUpdateNode(selectedNode.id, {
                 position: { ...selectedNode.position, x: Number(e.target.value) }
               })}
               className="w-20 px-1 py-0.5 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]
@@ -75,8 +75,8 @@ export function PropertiesPanel({
             <label className="text-xs text-gray-400">Y:</label>
             <input
               type="number"
-              value={Math.round(selectedNode.position.y)}
-              onChange={e => onUpdateNode(selectedNode.id, {
+              defaultValue={Math.round(selectedNode.position.y)}
+              onBlur={e => onUpdateNode(selectedNode.id, {
                 position: { ...selectedNode.position, y: Number(e.target.value) }
               })}
               className="w-20 px-1 py-0.5 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]

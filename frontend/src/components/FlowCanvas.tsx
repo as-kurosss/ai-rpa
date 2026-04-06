@@ -82,21 +82,11 @@ function FlowCanvasContent({
     setSelectedNodeId(null);
   }, [setSelectedNodeId]);
 
-  // Track mouse moves globally while dragging from palette
+  // Track mouse moves — listeners added only during drag, removed on drop.
   useEffect(() => {
     let dragging = false;
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!dragState.isDragging) {
-        if (dragging) {
-          dragging = false;
-          setGhostPos(null);
-          setIsOver(false);
-        }
-        return;
-      }
-      dragging = true;
-
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const over =
@@ -113,19 +103,22 @@ function FlowCanvasContent({
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      console.log('[FlowCanvas] mouseup, dragging:', dragging, 'blockType:', dragState.blockType);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+
       if (!dragging || !dragState.blockType) {
         dragState.set(null);
         setGhostPos(null);
         setIsOver(false);
+        dragging = false;
         return;
       }
 
       if (!containerRef.current) {
-        console.warn('[FlowCanvas] No container ref');
         dragState.set(null);
         setGhostPos(null);
         setIsOver(false);
+        dragging = false;
         return;
       }
 
@@ -136,16 +129,12 @@ function FlowCanvasContent({
         e.clientY >= rect.top &&
         e.clientY <= rect.bottom;
 
-      console.log('[FlowCanvas] mouseup over canvas:', over, 'clientX:', e.clientX, 'clientY:', e.clientY);
-
       if (over && dragState.blockType && VALID_BLOCKS.includes(dragState.blockType)) {
         const blockType = dragState.blockType as BlockType;
         const position = handlersRef.current.screenToFlowPosition({
           x: e.clientX,
           y: e.clientY,
         });
-
-        console.log('[FlowCanvas] Dropping block:', blockType, 'at', position);
 
         const newNode: Node = {
           id: crypto.randomUUID(),
@@ -166,10 +155,17 @@ function FlowCanvasContent({
       setIsOver(false);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    const startListening = () => {
+      if (dragging) return;
+      dragging = true;
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('rpa-drag-start', startListening);
 
     return () => {
+      window.removeEventListener('rpa-drag-start', startListening);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };

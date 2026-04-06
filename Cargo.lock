@@ -4365,6 +4365,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
+ "tokio",
  "uiautomation",
  "windows 0.62.2",
 ]

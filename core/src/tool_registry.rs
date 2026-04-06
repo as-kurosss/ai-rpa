@@ -11,55 +11,58 @@ use crate::tool::{
 use crate::selector::Selector;
 use uiautomation::UIAutomation;
 
-/// Реестр инструментов для динамического вызова по имени
+type ToolConstructor = Box<dyn Fn(Selector, &HashMap<String, String>) -> Result<Box<dyn Tool>>>;
+
+/// Реестр инструментов для динамического вызова по имени.
+/// Каждый инструмент получает селектор + карту параметров из сценария.
 pub struct ToolRegistry {
-    /// Карта: имя инструмента -> конструктор (функция, создающая инструмент)
-    tools: HashMap<String, Box<dyn Fn(Selector) -> Box<dyn Tool>>>,
+    tools: HashMap<String, ToolConstructor>,
 }
 
 impl ToolRegistry {
-    /// Создает новый реестр с зарегистрированными инструментами
+    /// Создаёт новый реестр с зарегистрированными инструментами
     pub fn new() -> Self {
         let mut registry = Self {
             tools: HashMap::new(),
         };
 
-        // Регистрируем ClickTool под именем "Click"
-        registry.register("Click".to_string(), Box::new(|selector| {
-            Box::new(ClickTool::new(selector))
+        registry.register("Click".to_string(), Box::new(|selector, _config| {
+            Ok(Box::new(ClickTool::new(selector)))
         }));
 
-        // Регистрируем TypeTool под именем "Type"
-        registry.register("Type".to_string(), Box::new(|selector| {
-            // TypeTool требует текст — по умолчанию пустой, задаётся через execute_tool_with_text
-            Box::new(TypeTool::new(selector, String::new()))
+        registry.register("Type".to_string(), Box::new(|selector, config| {
+            let text = config.get("text")
+                .cloned()
+                .unwrap_or_default();
+            Ok(Box::new(TypeTool::new(selector, text)))
         }));
 
         registry
     }
 
-    /// Регистрируем новый инструмент в реестре
+    /// Регистрирует новый инструмент
     pub fn register(
-        &mut self, 
-        name: String, 
-        constructor: Box<dyn Fn(Selector) -> Box<dyn Tool>>,
+        &mut self,
+        name: String,
+        constructor: ToolConstructor,
     ) {
         self.tools.insert(name, constructor);
     }
 
-    /// Создает инструмент по имени и селектору
+    /// Создаёт инструмент по имени, селектору и параметрам
     pub fn create_tool(
         &self,
         name: &str,
         selector: Selector,
+        config: &HashMap<String, String>,
     ) -> Result<Box<dyn Tool>> {
         let constructor = self.tools
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
-        Ok(constructor(selector))
+        constructor(selector, config)
     }
 
-    /// Возвращает список зарегистрированных инструментов
+    /// Список зарегистрированных инструментов
     pub fn tool_names(&self) -> Vec<&str> {
         self.tools.keys().map(|s| s.as_str()).collect()
     }
@@ -72,31 +75,20 @@ impl ToolRegistry {
         automation: &UIAutomation,
         ctx: &mut ExecutionContext,
     ) -> Result<()> {
-        let tool = self.create_tool(name, selector)?;
+        let tool = self.create_tool(name, selector, &HashMap::new())?;
         tool.execute(automation, ctx)
     }
 
-    /// Выполняет инструмент с дополнительным текстом (для TypeTool и подобных)
-    pub fn execute_tool_with_text(
+    /// Выполняет инструмент с параметрами
+    pub fn execute_tool_with_config(
         &self,
         name: &str,
         selector: Selector,
-        text: &str,
+        config: &HashMap<String, String>,
         automation: &UIAutomation,
         ctx: &mut ExecutionContext,
     ) -> Result<()> {
-        let constructor = self.tools
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("Tool not found: {}", name))?;
-
-        // Для TypeTool создаём с нужным текстом
-        if name == "Type" {
-            let tool = TypeTool::new(selector, text.to_string());
-            return tool.execute(automation, ctx);
-        }
-
-        // Для остальных — стандартный конструктор
-        let tool = constructor(selector);
+        let tool = self.create_tool(name, selector, config)?;
         tool.execute(automation, ctx)
     }
 }

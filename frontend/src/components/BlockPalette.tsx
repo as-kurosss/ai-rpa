@@ -11,17 +11,9 @@ const ALL_BLOCKS: BlockType[] = ['LaunchApp', 'Click', 'TypeText'];
 export const dragState = {
   blockType: null as BlockType | null,
   isDragging: false,
-  listeners: [] as ((isDragging: boolean) => void)[],
   set(type: BlockType | null) {
     this.blockType = type;
     this.isDragging = type !== null;
-    this.listeners.forEach(fn => fn(this.isDragging));
-  },
-  subscribe(fn: (isDragging: boolean) => void) {
-    this.listeners.push(fn);
-    return () => {
-      this.listeners = this.listeners.filter(l => l !== fn);
-    };
   },
 };
 
@@ -34,7 +26,8 @@ export function BlockPalette({ blockCount }: BlockPaletteProps) {
 
   const onPointerDown = (blockType: BlockType) => {
     dragState.set(blockType);
-    console.log('[BlockPalette] pointerDown:', blockType);
+    // Notify FlowCanvas to start listening for mouse events
+    window.dispatchEvent(new CustomEvent('rpa-drag-start', { detail: { blockType } }));
   };
 
   return (

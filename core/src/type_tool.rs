@@ -50,12 +50,23 @@ impl Tool for TypeTool {
         // 3. Кликаем по элементу для фокуса
         element.click()?;
 
-        // 4. Вводим текст
-        element.send_text(&self.text, 42)?;
+        // 4. Вводим текст — экранируем фигурные скобки, чтобы `{Enter}`, `{Tab}`
+        //    не интерпретировались как спецклавиши SendKeys.
+        let escaped = escape_send_keys(&self.text);
+        element.send_text(&escaped, 42)?;
 
         // 5. Логируем успешное действие в контекст
         ctx.log(format!("✅ Typed '{}' into element: {:?}", self.text, self.selector));
 
         Ok(())
     }
+}
+
+/// Экранирует спецсимволы SendKeys: `{` → `{{}`, `}` → `{}}`, `+` → `{+}`, `^` → `{^}`, `%` → `{%}`
+fn escape_send_keys(s: &str) -> String {
+    s.replace('{', "{{}")
+     .replace('}', "{}}")
+     .replace('+', "{+}")
+     .replace('^', "{^}")
+     .replace('%', "{%}")
 }

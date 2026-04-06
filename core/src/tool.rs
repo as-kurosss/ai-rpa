@@ -19,8 +19,12 @@ impl ExecutionContext {
         Self::default()
     }
 
+    /// Добавляет запись в лог, ограничивая размер 500 записями.
     pub fn log(&mut self, message: String) {
         self.log.push(message);
+        if self.log.len() > 500 {
+            self.log.drain(..100);
+        }
     }
 }
 

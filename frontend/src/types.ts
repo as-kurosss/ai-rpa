@@ -35,9 +35,9 @@ export const BLOCK_ICONS: Record<BlockType, string> = {
 };
 
 export const BLOCK_ACCENT: Record<BlockType, string> = {
-  LaunchApp: '#828282',
-  Click: '#828282',
-  TypeText: '#828282',
+  LaunchApp: '#4CAF50', // green
+  Click: '#2196F3',     // blue
+  TypeText: '#FF9800',  // orange
 };
 
 export function createDefaultConfig(blockType: BlockType): BlockConfig {

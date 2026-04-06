@@ -53,8 +53,8 @@ fn find_in_path(app_name: &str) -> Option<PathBuf> {
     // Получаем PATH
     let path_var = std::env::var("PATH").ok()?;
     
-    // Ищем в каждой директории
-    for dir in path_var.split(';') {
+    // Ищем в каждой директории, пропуская пустые записи (trailing `;` или `;;`)
+    for dir in path_var.split(';').filter(|d| !d.is_empty()) {
         let candidate = Path::new(dir).join(&app_with_ext);
         if candidate.exists() {
             return Some(candidate);

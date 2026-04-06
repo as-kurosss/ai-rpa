@@ -1,6 +1,8 @@
 // highlight_overlay.rs
 
 use std::sync::Once;
+use std::sync::LazyLock;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use windows::Win32::Foundation::*;
@@ -19,6 +21,30 @@ const BASE_DPI: f32 = 96.0;
 
 /// Однократная инициализация DPI awareness
 static DPI_INIT: Once = Once::new();
+
+/// Single-worker thread pool для highlight операций.
+/// Предотвращает неограниченное создание потоков при быстрых вызовах.
+struct HighlightWorker {
+    sender: mpsc::Sender<Box<dyn FnOnce() + Send>>,
+}
+
+impl HighlightWorker {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        thread::spawn(move || {
+            while let Ok(task) = rx.recv() {
+                task();
+            }
+        });
+        Self { sender: tx }
+    }
+
+    fn submit(&self, task: impl FnOnce() + Send + 'static) {
+        let _ = self.sender.send(Box::new(task));
+    }
+}
+
+static HIGHLIGHT_WORKER: LazyLock<HighlightWorker> = LazyLock::new(HighlightWorker::new);
 
 /// Делает процесс DPI-aware (вызывается автоматически при первом обращении)
 pub fn ensure_dpi_aware() {
@@ -107,14 +133,14 @@ pub fn draw_highlight_rect_blocking(x: i32, y: i32, width: i32, height: i32, dur
 
 /// Рисует зелёную рамку в отдельном потоке (не блокирует вызывающий поток)
 pub fn draw_highlight_rect_async(x: i32, y: i32, width: i32, height: i32, duration_ms: u64) {
-    thread::spawn(move || {
+    HIGHLIGHT_WORKER.submit(move || {
         draw_highlight_rect_blocking(x, y, width, height, duration_ms);
     });
 }
 
 /// Рисует анимированную рамку с миганием (в отдельном потоке)
 pub fn draw_highlight_rect_animated(x: i32, y: i32, width: i32, height: i32, flashes: u32) {
-    thread::spawn(move || {
+    HIGHLIGHT_WORKER.submit(move || {
         for i in 0..flashes {
             draw_highlight_rect_blocking(x, y, width, height, 300);
 
@@ -151,101 +177,78 @@ pub fn draw_highlight_rect_animated(x: i32, y: i32, width: i32, height: i32, fla
 /// Координаты принимаются в physical pixels.
 pub fn draw_highlight_rect_track_cursor(x: i32, y: i32, width: i32, height: i32) {
     unsafe {
-        // Создаём перо один раз
         let pen = CreatePen(PS_SOLID, BORDER_THICKNESS, GREEN_COLOR);
         if pen.is_invalid() {
             return;
         }
 
-        let mut is_drawn = false;
-        let mut last_hdc = None;
-        let mut last_old_pen = None;
-        let mut last_old_brush = None;
-
+        let mut state: Option<(HDC, HGDIOBJ, HGDIOBJ)> = None; // (hdc, old_pen, old_brush)
         let start = std::time::Instant::now();
         let timeout = Duration::from_secs(10);
 
         loop {
-            // Таймаут для предотвращения бесконечного цикла
             if start.elapsed() > timeout {
                 break;
             }
 
-            // Получаем текущую позицию курсора
             let mut point = POINT { x: 0, y: 0 };
             if GetCursorPos(&mut point).is_err() {
-                // Не удалось получить позицию — выходим
                 break;
             }
 
             let cursor_x = point.x;
             let cursor_y = point.y;
-
-            // Проверяем, находится ли курсор в пределах элемента
             let is_inside = cursor_x >= x && cursor_x <= (x + width) &&
                             cursor_y >= y && cursor_y <= (y + height);
 
-            if is_inside {
-                // Курсор на элементе — рисуем рамку, если ещё не нарисована
-                if !is_drawn {
-                    let hdc_screen = GetDC(None);
-                    if !hdc_screen.is_invalid() {
-                        let old_pen = SelectObject(hdc_screen, pen.into());
-                        let old_brush = SelectObject(hdc_screen, GetStockObject(NULL_BRUSH).into());
+            if is_inside && state.is_none() {
+                // Курсор на элементе — рисуем рамку
+                let hdc_screen = GetDC(None);
+                if !hdc_screen.is_invalid() {
+                    let old_pen = SelectObject(hdc_screen, pen.into());
+                    let old_brush = SelectObject(hdc_screen, GetStockObject(NULL_BRUSH).into());
 
-                        let left = x - (BORDER_THICKNESS / 2);
-                        let top = y - (BORDER_THICKNESS / 2);
-                        let right = x + width + (BORDER_THICKNESS / 2);
-                        let bottom = y + height + (BORDER_THICKNESS / 2);
+                    let left = x - (BORDER_THICKNESS / 2);
+                    let top = y - (BORDER_THICKNESS / 2);
+                    let right = x + width + (BORDER_THICKNESS / 2);
+                    let bottom = y + height + (BORDER_THICKNESS / 2);
+                    let _ = Rectangle(hdc_screen, left, top, right, bottom);
 
-                        let _ = Rectangle(hdc_screen, left, top, right, bottom);
-
-                        // Сохраняем для последующей очистки
-                        last_hdc = Some(hdc_screen);
-                        last_old_pen = Some(old_pen);
-                        last_old_brush = Some(old_brush);
-
-                        is_drawn = true;
-                    }
+                    state = Some((hdc_screen, old_pen, old_brush));
                 }
-            } else {
-                // Курсор ушёл с элемента — стираем рамку и выходим
-                if is_drawn {
-                    if let Some(hdc_screen) = last_hdc {
-                        if let Some(old_pen) = last_old_pen {
-                            SelectObject(hdc_screen, old_pen);
-                        }
-                        if let Some(old_brush) = last_old_brush {
-                            SelectObject(hdc_screen, old_brush);
-                        }
+            } else if !is_inside && state.is_some() {
+                // Курсор ушёл — стираем и освобождаем DC
+                let (hdc_screen, old_pen, old_brush) = state.take().unwrap();
+                SelectObject(hdc_screen, old_pen);
+                SelectObject(hdc_screen, old_brush);
 
-                        // Инвалидируем область для перерисовки
-                        let left = x - (BORDER_THICKNESS / 2) - 2;
-                        let top = y - (BORDER_THICKNESS / 2) - 2;
-                        let right = x + width + (BORDER_THICKNESS / 2) + 2;
-                        let bottom = y + height + (BORDER_THICKNESS / 2) + 2;
-
-                        let rect = RECT {
-                            left,
-                            top,
-                            right,
-                            bottom,
-                        };
-
-                        let _ = InvalidateRect(None, Some(&rect), false);
-                        ReleaseDC(None, hdc_screen);
-                    }
-
-                    // Выходим из функции
-                    break;
-                }
+                let left = x - (BORDER_THICKNESS / 2) - 2;
+                let top = y - (BORDER_THICKNESS / 2) - 2;
+                let right = x + width + (BORDER_THICKNESS / 2) + 2;
+                let bottom = y + height + (BORDER_THICKNESS / 2) + 2;
+                let rect = RECT { left, top, right, bottom };
+                let _ = InvalidateRect(None, Some(&rect), false);
+                ReleaseDC(None, hdc_screen);
+                break;
             }
 
-            // Короткая пауза перед следующей проверкой
             thread::sleep(Duration::from_millis(30));
         }
 
-        // Освобождаем перо в любом случае
+        // Cleanup при таймауте или раннем выходе — гарантированно освобождаем DC
+        if let Some((hdc_screen, old_pen, old_brush)) = state.take() {
+            SelectObject(hdc_screen, old_pen);
+            SelectObject(hdc_screen, old_brush);
+
+            let left = x - (BORDER_THICKNESS / 2) - 2;
+            let top = y - (BORDER_THICKNESS / 2) - 2;
+            let right = x + width + (BORDER_THICKNESS / 2) + 2;
+            let bottom = y + height + (BORDER_THICKNESS / 2) + 2;
+            let rect = RECT { left, top, right, bottom };
+            let _ = InvalidateRect(None, Some(&rect), false);
+            ReleaseDC(None, hdc_screen);
+        }
+
         let _ = DeleteObject(pen.into());
     }
 }

@@ -8,6 +8,59 @@ import { LogPanel } from './components/LogPanel';
 import { BlockType } from './types';
 import { executeScenario, stopExecution, type ScenarioStep } from './tauri';
 
+/** Топологическая сортировка нод по рёбрам.
+ *  Ноды без входящих рёбер идут первыми.
+ *  Несвязанные ноды сортируются по Y. */
+function topologicalSort(allNodes: Node[], allEdges: Edge[]): Node[] {
+  const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+
+  for (const n of allNodes) {
+    inDegree.set(n.id, 0);
+    adj.set(n.id, []);
+  }
+
+  for (const e of allEdges) {
+    if (nodeMap.has(e.source) && nodeMap.has(e.target)) {
+      adj.get(e.source)!.push(e.target);
+      inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
+    }
+  }
+
+  // Kahn's algorithm
+  const queue: string[] = [];
+  // Инициализируем очередь — ноды с inDegree=0, сортируем по Y для детерминизма
+  const roots = allNodes
+    .filter(n => (inDegree.get(n.id) || 0) === 0)
+    .sort((a, b) => (a.position.y || 0) - (b.position.y || 0))
+    .map(n => n.id);
+  queue.push(...roots);
+
+  const result: Node[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const node = nodeMap.get(id);
+    if (node) result.push(node);
+
+    const neighbors = adj.get(id) || [];
+    for (const next of neighbors) {
+      const deg = (inDegree.get(next) || 1) - 1;
+      inDegree.set(next, deg);
+      if (deg === 0) queue.push(next);
+    }
+  }
+
+  // Ноды, не достигнутые из roots (циклы или изолированные)
+  const visited = new Set(result.map(n => n.id));
+  const remaining = allNodes
+    .filter(n => !visited.has(n.id))
+    .sort((a, b) => (a.position.y || 0) - (b.position.y || 0));
+  result.push(...remaining);
+
+  return result;
+}
+
 // Начальные демо-блоки
 function createInitialNodes(): Node[] {
   return [
@@ -90,10 +143,9 @@ export default function App() {
     setIsRunning(true);
     setLogs([]);
 
-    // Сортируем ноды по Y — порядок выполнения сверху вниз
-    const sorted = [...nodes].sort(
-      (a, b) => (a.position.y || 0) - (b.position.y || 0)
-    );
+    // Топологическая сортировка по рёбрам — порядок выполнения определяется графом.
+    // Фолбэк на Y-сортировку для несвязанных нод.
+    const sorted = topologicalSort(nodes, edges);
 
     const steps: ScenarioStep[] = sorted.map((n) => ({
       type: (n.data as { blockType?: string }).blockType || 'unknown',
@@ -113,7 +165,7 @@ export default function App() {
     } finally {
       setIsRunning(false);
     }
-  }, [nodes]);
+  }, [nodes, edges]);
 
   const handleStop = useCallback(async () => {
     try {
