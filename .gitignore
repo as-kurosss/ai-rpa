@@ -1,3 +1,26 @@
-/target
-/target/
-Cargo.lock
+# Rust build artifacts
+target/
+**/target/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Tauri generated
+frontend/src-tauri/gen/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock files (keep root Cargo.lock but not frontend's)
+frontend/package-lock.json
+frontend/src-tauri/Cargo.lock

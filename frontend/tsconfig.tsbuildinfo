@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/tauri.ts","./src/types.ts","./src/vite-env.d.ts","./src/components/blocknode.tsx","./src/components/blockpalette.tsx","./src/components/flowcanvas.tsx","./src/components/logpanel.tsx","./src/components/propertiespanel.tsx","./src/components/topbar.tsx","./src/store/dragstore.ts"],"version":"5.9.3"}

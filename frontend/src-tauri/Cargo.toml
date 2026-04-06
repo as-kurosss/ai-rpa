@@ -1,15 +1,29 @@
 [package]
-name = "ai-rpa"
+name = "rpa-studio-tauri"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "rpa_studio_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uiautomation = { version = "0.24.4", features = ["pattern"] }
 anyhow = "1.0.102"
-thiserror = "2.0.18"
-windows = { version = "0.62", features = [
+
+# Re-use existing ai-rpa code
+ai-rpa = { path = "../.." }
+
+[dependencies.windows]
+version = "0.62"
+features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -19,8 +33,4 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_System_Com",
     "Win32_UI_Accessibility",
-]}
-
-[dev-dependencies]
-egui = "0.31"
-eframe = "0.31"
+]

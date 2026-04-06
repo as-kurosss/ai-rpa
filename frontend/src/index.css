@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* XYFlow custom styles */
+.react-flow__node {
+  border-radius: 6px;
+}
+
+.react-flow__edge-path {
+  stroke: #5a8cc8;
+  stroke-width: 2.5;
+}
+
+.react-flow__edge-animated {
+  stroke: #5a8cc8;
+}

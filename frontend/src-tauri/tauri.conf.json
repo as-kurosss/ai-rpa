@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri/crates/tauri-config-schema/schema.json",
+  "productName": "RPA Studio",
+  "version": "0.1.0",
+  "identifier": "com.ai-rpa.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "RPA Studio",
+        "width": 1100,
+        "height": 750,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}
