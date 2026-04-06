@@ -54,6 +54,14 @@ impl BlockType {
     }
 }
 
+// ─── Соединение между блоками ─────────────────────────────────
+
+#[derive(Clone, Debug)]
+struct Connection {
+    from_id: u64,
+    to_id: u64,
+}
+
 // ─── Блок на canvas ────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -68,6 +76,7 @@ struct FlowBlock {
 
 struct RpaApp {
     blocks: Vec<FlowBlock>,
+    connections: Vec<Connection>,
     next_block_id: u64,
     selected_block_id: Option<u64>,
     dragging_block_id: Option<u64>,
@@ -77,6 +86,12 @@ struct RpaApp {
     is_running: bool,
     search_query: String,
     log_receiver: mpsc::Receiver<String>,
+    /// Блок, который перетаскивают из палитры на canvas
+    drag_payload_block_type: Option<BlockType>,
+    /// Позиция указателя при перетаскивании из палитры (для floating preview)
+    drag_pointer_pos: egui::Pos2,
+    /// Создание соединения: блок, из которого тянем
+    connecting_from: Option<u64>,
 }
 
 impl RpaApp {
@@ -123,6 +138,10 @@ impl RpaApp {
                     ]),
                 },
             ],
+            connections: vec![
+                Connection { from_id: 1, to_id: 2 },
+                Connection { from_id: 2, to_id: 3 },
+            ],
             next_block_id: 4,
             selected_block_id: None,
             dragging_block_id: None,
@@ -137,34 +156,75 @@ impl RpaApp {
                 let _ = tx;
                 rx
             },
+            drag_payload_block_type: None,
+            drag_pointer_pos: egui::Pos2::ZERO,
+            connecting_from: None,
         }
     }
 
-    fn add_block(&mut self, block_type: BlockType) {
-        let center = egui::Pos2::new(
-            200.0 - self.canvas_offset.x,
-            200.0 - self.canvas_offset.y,
-        );
-        let mut config = HashMap::new();
-        match &block_type {
-            BlockType::LaunchApp => {
-                config.insert("app".to_string(), "notepad".to_string());
-            }
-            BlockType::Click => {
-                config.insert("selector".to_string(), "classname=Edit".to_string());
-            }
-            BlockType::TypeText => {
-                config.insert("selector".to_string(), "classname=Edit".to_string());
-                config.insert("text".to_string(), "".to_string());
+    /// Топологический обход по графу соединений.
+    /// Если есть соединения — следует по ним, иначе — по Y-порядку.
+    fn order_blocks_by_connections(&self) -> Vec<FlowBlock> {
+        if self.connections.is_empty() {
+            // Нет соединений — старый способ (по Y)
+            let mut sorted = self.blocks.clone();
+            sorted.sort_by(|a, b| a.position.y.partial_cmp(&b.position.y).unwrap());
+            return sorted;
+        }
+
+        let mut result = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        // Нахожу начальные блоки (без входящих соединений)
+        let has_incoming: std::collections::HashSet<u64> = self.connections.iter().map(|c| c.to_id).collect();
+        let mut start_ids: Vec<u64> = self.blocks.iter()
+            .filter(|b| !has_incoming.contains(&b.id))
+            .map(|b| b.id)
+            .collect();
+        // Если нет начальных (цикл) — беру блок с минимальным Y
+        if start_ids.is_empty() {
+            let mut by_y = self.blocks.clone();
+            by_y.sort_by(|a, b| a.position.y.partial_cmp(&b.position.y).unwrap());
+            if let Some(first) = by_y.first() {
+                start_ids.push(first.id);
             }
         }
-        self.blocks.push(FlowBlock {
-            id: self.next_block_id,
-            block_type,
-            position: center,
-            config,
+        // Сортирую стартовые по Y
+        start_ids.sort_by_key(|id| {
+            self.blocks.iter().find(|b| b.id == *id).map(|b| b.position.y as i32).unwrap_or(0)
         });
-        self.next_block_id += 1;
+
+        for start_id in start_ids {
+            self._traverse(start_id, &mut result, &mut visited);
+        }
+
+        // Добавляю недостижимые блоки (по Y)
+        let mut unreachable: Vec<_> = self.blocks.iter()
+            .filter(|b| !visited.contains(&b.id))
+            .cloned()
+            .collect();
+        unreachable.sort_by(|a, b| a.position.y.partial_cmp(&b.position.y).unwrap());
+        result.extend(unreachable);
+
+        result
+    }
+
+    fn _traverse(&self, id: u64, result: &mut Vec<FlowBlock>, visited: &mut std::collections::HashSet<u64>) {
+        if visited.contains(&id) {
+            return;
+        }
+        visited.insert(id);
+        if let Some(block) = self.blocks.iter().find(|b| b.id == id) {
+            result.push(block.clone());
+        }
+        // Рекурсия по исходящим соединениям
+        let outgoing: Vec<u64> = self.connections.iter()
+            .filter(|c| c.from_id == id)
+            .map(|c| c.to_id)
+            .collect();
+        for next_id in outgoing {
+            self._traverse(next_id, result, visited);
+        }
     }
 
     fn execute_scenario(&mut self) {
@@ -172,12 +232,9 @@ impl RpaApp {
         self.execution_log.clear();
         self.execution_log.push("▶ Запуск сценария...".to_string());
 
-        // Собираем данные сценария
-        let mut sorted_blocks: Vec<_> = self.blocks.clone();
-        sorted_blocks.sort_by(|a, b| a.position.y.partial_cmp(&b.position.y).unwrap());
-
-        let scenario: Vec<(String, HashMap<String, String>)> = sorted_blocks
-            .iter()
+        // Определяю порядок выполнения через соединения (топологический обход)
+        let blocks_data: Vec<(String, HashMap<String, String>)> = self.order_blocks_by_connections()
+            .into_iter()
             .map(|b| {
                 let type_name = match b.block_type {
                     BlockType::LaunchApp => "LaunchApp".to_string(),
@@ -205,7 +262,7 @@ impl RpaApp {
             let mut ctx = ExecutionContext::new();
             let registry = ToolRegistry::new();
 
-            for (i, (type_name, config)) in scenario.iter().enumerate() {
+            for (i, (type_name, config)) in blocks_data.iter().enumerate() {
                 let step = i + 1;
 
                 match type_name.as_str() {
@@ -371,20 +428,48 @@ impl RpaApp {
                         .collect();
 
                     for block_type in filtered {
-                        let btn = egui::Button::new(
-                            egui::RichText::new(format!("{}  {}", block_type.icon(), block_type.name()))
-                                .color(egui::Color32::from_rgb(40, 40, 40))
-                                .size(12.0),
-                        )
-                        .fill(egui::Color32::from_rgb(240, 240, 240))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 200)))
-                        .corner_radius(4.0)
-                        .min_size(egui::vec2(180.0, 30.0));
+                        // Кастомный widget с Sense::drag для поддержки перетаскивания
+                        let desired_size = egui::vec2(180.0, 30.0);
+                        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
-                        let response = ui.add(btn);
-                        if response.clicked() {
-                            self.add_block(block_type.clone());
-                            self.execution_log.push(format!("+ Добавлен: {}", block_type.name()));
+                        // Фон
+                        let is_hovered = response.hovered();
+                        let is_dragging = response.is_pointer_button_down_on();
+                        let fill = if is_dragging {
+                            egui::Color32::from_rgb(220, 220, 220)
+                        } else if is_hovered {
+                            egui::Color32::from_rgb(230, 230, 230)
+                        } else {
+                            egui::Color32::from_rgb(240, 240, 240)
+                        };
+                        let stroke_color = if is_hovered {
+                            egui::Color32::from_rgb(160, 160, 160)
+                        } else {
+                            egui::Color32::from_rgb(200, 200, 200)
+                        };
+                        ui.painter_at(rect).rect_filled(rect, 4.0, fill);
+                        ui.painter_at(rect).rect_stroke(rect, 4.0, egui::Stroke::new(1.0, stroke_color), egui::StrokeKind::Outside);
+
+                        // Текст
+                        let label = format!("{}  {}", block_type.icon(), block_type.name());
+                        ui.painter_at(rect).text(
+                            rect.left_center() + egui::vec2(8.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            label,
+                            egui::FontId::new(12.0, egui::FontFamily::Proportional),
+                            egui::Color32::from_rgb(40, 40, 40),
+                        );
+
+                        // Начало перетаскивания — запоминаем блок и позицию мыши
+                        if response.drag_started() {
+                            self.drag_payload_block_type = Some(block_type.clone());
+                            let pointer = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(egui::Pos2::ZERO);
+                            self.drag_pointer_pos = pointer;
+                        }
+
+                        // Курсор
+                        if is_hovered {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grab);
                         }
 
                         ui.add_space(4.0);
@@ -572,59 +657,126 @@ impl RpaApp {
                     );
                 }
 
-                // Сортируем блоки по Y для порядка выполнения
-                let mut sorted_blocks: Vec<_> = self.blocks.clone();
-                sorted_blocks.sort_by(|a, b| a.position.y.partial_cmp(&b.position.y).unwrap());
+                // Блоки в порядке добавления (не сортировка по Y — порядок теперь через соединения)
+                let blocks = self.blocks.clone();
 
-                // Рисуем соединения
-                for i in 0..sorted_blocks.len().saturating_sub(1) {
-                    let current = &sorted_blocks[i];
-                    let next = &sorted_blocks[i + 1];
-
-                    let start = egui::Pos2::new(
-                        rect.min.x + current.position.x + 110.0 + self.canvas_offset.x,
-                        rect.min.y + current.position.y + 70.0 + self.canvas_offset.y,
-                    );
-                    let end = egui::Pos2::new(
-                        rect.min.x + next.position.x + 110.0 + self.canvas_offset.x,
-                        rect.min.y + next.position.y + self.canvas_offset.y,
-                    );
-
-                    let mid_y = (start.y + end.y) / 2.0;
-                    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                        [start, egui::Pos2::new(start.x, mid_y), egui::Pos2::new(end.x, mid_y), end],
-                        false,
-                        egui::Color32::TRANSPARENT,
-                        egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 100, 100)),
-                    ));
-
-                    // Стрелка
-                    let arrow_size = 6.0;
-                    let arrow_tip = end;
-                    let arrow_left = egui::Pos2::new(end.x - arrow_size / 2.0, end.y - arrow_size);
-                    let arrow_right = egui::Pos2::new(end.x + arrow_size / 2.0, end.y - arrow_size);
-                    painter.add(egui::epaint::Shape::convex_polygon(
-                        vec![arrow_tip, arrow_left, arrow_right],
-                        egui::Color32::from_rgb(100, 100, 100),
-                        egui::Stroke::NONE,
-                    ));
-                }
-
-                // Рисуем блоки
-                for block in &sorted_blocks {
-                    let block_rect = egui::Rect::from_min_size(
+                // ─── Соединения ────────────────────────────────
+                let block_rect_fn = |block: &FlowBlock| -> egui::Rect {
+                    egui::Rect::from_min_size(
                         egui::Pos2::new(
                             rect.min.x + block.position.x + self.canvas_offset.x,
                             rect.min.y + block.position.y + self.canvas_offset.y,
                         ),
                         egui::Vec2::new(220.0, 70.0),
-                    );
+                    )
+                };
+
+                let find_block = |id: u64| -> Option<FlowBlock> {
+                    self.blocks.iter().find(|b| b.id == id).cloned()
+                };
+
+                // Рисую существующие соединения
+                for conn in &self.connections {
+                    if let (Some(from_block), Some(to_block)) = (find_block(conn.from_id), find_block(conn.to_id)) {
+                        let from_rect = block_rect_fn(&from_block);
+                        let to_rect = block_rect_fn(&to_block);
+
+                        let start = egui::Pos2::new(from_rect.center().x, from_rect.max.y); // output
+                        let end = egui::Pos2::new(to_rect.center().x, to_rect.min.y); // input
+
+                        let dx = (end.x - start.x).abs();
+                        let dy = (end.y - start.y).abs();
+                        let cp_offset = (dy.max(dx * 0.5)).min(80.0);
+
+                        painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                            [
+                                start,
+                                egui::Pos2::new(start.x, start.y + cp_offset),
+                                egui::Pos2::new(end.x, end.y - cp_offset),
+                                end,
+                            ],
+                            false,
+                            egui::Color32::TRANSPARENT,
+                            egui::Stroke::new(2.5, egui::Color32::from_rgb(90, 140, 200)),
+                        ));
+
+                        // Стрелка
+                        let arrow_size = 7.0;
+                        let arrow_tip = end;
+                        let dir = (end - egui::Pos2::new(end.x, end.y - cp_offset)).normalized();
+                        let perp = egui::vec2(-dir.y, dir.x);
+                        let arrow_left = arrow_tip - dir * arrow_size - perp * (arrow_size * 0.6);
+                        let arrow_right = arrow_tip - dir * arrow_size + perp * (arrow_size * 0.6);
+                        painter.add(egui::epaint::Shape::convex_polygon(
+                            vec![arrow_tip, arrow_left, arrow_right],
+                            egui::Color32::from_rgb(90, 140, 200),
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                }
+
+                // Временная линия при создании соединения
+                if self.connecting_from.is_some() {
+                    if let Some(from_block) = find_block(self.connecting_from.unwrap()) {
+                        let from_rect = block_rect_fn(&from_block);
+                        let start = egui::Pos2::new(from_rect.center().x, from_rect.max.y);
+                        let pointer = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(start);
+                        let in_canvas = rect.contains(pointer);
+
+                        if in_canvas {
+                            let end = pointer;
+                            let dx = (end.x - start.x).abs();
+                            let dy = (end.y - start.y).abs();
+                            let cp_offset = (dy.max(dx * 0.5)).min(80.0);
+
+                            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                                [
+                                    start,
+                                    egui::Pos2::new(start.x, start.y + cp_offset),
+                                    egui::Pos2::new(end.x, end.y - cp_offset),
+                                    end,
+                                ],
+                                false,
+                                egui::Color32::TRANSPARENT,
+                                egui::Stroke::new(2.5, egui::Color32::from_rgba_unmultiplied(90, 140, 200, 150)),
+                            ));
+
+                            // Подсветка целевого input dot
+                            for block in &blocks {
+                                let br = block_rect_fn(block);
+                                let input_dot = egui::Pos2::new(br.center().x, br.min.y);
+                                if input_dot.distance(pointer) < 20.0 {
+                                    painter.circle_filled(input_dot, 12.0, egui::Color32::from_rgba_unmultiplied(90, 140, 200, 80));
+                                    painter.circle_stroke(input_dot, 12.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(90, 140, 200)));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ─── Блоки ─────────────────────────────────────
+                // Собираю информацию о hover на input dots для подсветки
+                let mut hovered_input_dot: Option<u64> = None;
+                let pointer_pos = ctx.input(|i| i.pointer.latest_pos());
+                if let Some(pp) = pointer_pos {
+                    for block in &blocks {
+                        let br = block_rect_fn(block);
+                        let input_dot = egui::Pos2::new(br.center().x, br.min.y);
+                        if input_dot.distance(pp) < 15.0 {
+                            hovered_input_dot = Some(block.id);
+                        }
+                    }
+                }
+
+                for block in &blocks {
+                    let block_rect = block_rect_fn(block);
 
                     let accent = block.block_type.accent_color();
                     let is_selected = self.selected_block_id == Some(block.id);
                     let is_dragging = self.dragging_block_id == Some(block.id);
+                    let is_connecting_target = hovered_input_dot == Some(block.id);
 
-                    // Тень при выделении
+                    // Тень при выделении / перетаскивании
                     if is_selected || is_dragging {
                         painter.rect_filled(
                             block_rect.expand(3.0),
@@ -639,6 +791,11 @@ impl RpaApp {
                     // Бордер
                     let border_color = if is_selected { accent } else { egui::Color32::from_rgb(200, 200, 200) };
                     painter.rect_stroke(block_rect, 6.0, egui::Stroke::new(if is_selected { 2.0 } else { 1.0 }, border_color), egui::StrokeKind::Outside);
+
+                    // Подсветка если цель соединения
+                    if is_connecting_target {
+                        painter.rect_filled(block_rect.expand(2.0), 8.0, egui::Color32::from_rgba_unmultiplied(90, 140, 200, 30));
+                    }
 
                     // Цветная полоска слева
                     let strip_rect = egui::Rect::from_min_max(
@@ -670,38 +827,49 @@ impl RpaApp {
                         painter.galley(hint_pos, hint_galley, egui::Color32::from_rgb(140, 140, 140));
                     }
 
-                    // Точки соединения
+                    // ─── Точки соединения ──────────────────────
                     let dot_radius = 5.0;
                     let in_dot = egui::Pos2::new(block_rect.center().x, block_rect.min.y);
-                    painter.circle_filled(in_dot, dot_radius, egui::Color32::from_rgb(100, 100, 100));
-                    painter.circle_stroke(in_dot, dot_radius + 1.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
-
                     let out_dot = egui::Pos2::new(block_rect.center().x, block_rect.max.y);
-                    painter.circle_filled(out_dot, dot_radius, egui::Color32::from_rgb(100, 100, 100));
-                    painter.circle_stroke(out_dot, dot_radius + 1.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+
+                    // Input dot — подсвечивается при наведении
+                    let in_dot_highlight = is_connecting_target;
+                    let in_dot_r = if in_dot_highlight { dot_radius + 4.0 } else { dot_radius };
+                    painter.circle_filled(in_dot, in_dot_r, egui::Color32::from_rgb(90, 140, 200));
+                    painter.circle_stroke(in_dot, in_dot_r + 1.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+
+                    // Output dot — зелёная для drag
+                    let out_dot_highlight = self.connecting_from == Some(block.id);
+                    let out_dot_r = if out_dot_highlight { dot_radius + 3.0 } else { dot_radius };
+                    let out_color = if out_dot_highlight {
+                        egui::Color32::from_rgb(60, 180, 75)
+                    } else {
+                        egui::Color32::from_rgb(90, 140, 200)
+                    };
+                    painter.circle_filled(out_dot, out_dot_r, out_color);
+                    painter.circle_stroke(out_dot, out_dot_r + 1.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
                 }
 
-                // Взаимодействие
+                // ─── Взаимодействие ────────────────────────────
                 let response = ui.interact(
                     rect,
                     ui.id().with("canvas"),
                     egui::Sense::click_and_drag(),
                 );
 
-                if response.dragged() {
-                    self.canvas_offset += response.drag_delta();
-                }
+                // Определяю canvas-пози указателя
+                let canvas_pos = response.interact_pointer_pos().map(|pos| egui::Pos2::new(
+                    pos.x - rect.min.x - self.canvas_offset.x,
+                    pos.y - rect.min.y - self.canvas_offset.y,
+                ));
 
+                // 1) Клик — выбор блока или снятие выделения
                 if response.clicked() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let canvas_pos = egui::Pos2::new(
-                            pos.x - rect.min.x - self.canvas_offset.x,
-                            pos.y - rect.min.y - self.canvas_offset.y,
-                        );
+                    if let Some(cp) = canvas_pos {
                         let mut found = false;
                         for block in self.blocks.iter().rev() {
                             let br = egui::Rect::from_min_size(block.position, egui::Vec2::new(220.0, 70.0));
-                            if br.contains(canvas_pos) {
+                            if br.contains(cp) {
                                 self.selected_block_id = Some(block.id);
                                 found = true;
                                 break;
@@ -713,20 +881,29 @@ impl RpaApp {
                     }
                 }
 
-                if response.dragged() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let canvas_pos = egui::Pos2::new(
-                            pos.x - rect.min.x - self.canvas_offset.x,
-                            pos.y - rect.min.y - self.canvas_offset.y,
-                        );
-                        if self.dragging_block_id.is_none() {
+                // 2) Начало перетаскивания блока на canvas
+                if response.drag_started() {
+                    if let Some(cp) = canvas_pos {
+                        // Проверяю, попал ли в output dot (начало соединения)
+                        for block in &self.blocks {
+                            let br = egui::Rect::from_min_size(block.position, egui::Vec2::new(220.0, 70.0));
+                            let out_dot = egui::Pos2::new(br.center().x, br.max.y);
+                            if out_dot.distance(egui::Pos2::new(cp.x, cp.y)) < 15.0 {
+                                // Начало создания соединения
+                                self.connecting_from = Some(block.id);
+                                break;
+                            }
+                        }
+
+                        // Если не соединение — проверяю попал ли в блок
+                        if self.connecting_from.is_none() {
                             for block in &self.blocks {
                                 let br = egui::Rect::from_min_size(block.position, egui::Vec2::new(220.0, 70.0));
-                                if br.contains(canvas_pos) {
+                                if br.contains(cp) {
                                     self.dragging_block_id = Some(block.id);
                                     self.drag_offset = egui::vec2(
-                                        canvas_pos.x - block.position.x,
-                                        canvas_pos.y - block.position.y,
+                                        cp.x - block.position.x,
+                                        cp.y - block.position.y,
                                     );
                                     break;
                                 }
@@ -735,20 +912,51 @@ impl RpaApp {
                     }
                 }
 
+                // 3) Перетаскивание существующего блока на canvas
                 if let Some(dragging_id) = self.dragging_block_id {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let canvas_pos = egui::Pos2::new(
-                            pos.x - rect.min.x - self.canvas_offset.x,
-                            pos.y - rect.min.y - self.canvas_offset.y,
-                        );
+                    if let Some(cp) = canvas_pos {
                         if let Some(block) = self.blocks.iter_mut().find(|b| b.id == dragging_id) {
-                            block.position.x = canvas_pos.x - self.drag_offset.x;
-                            block.position.y = canvas_pos.y - self.drag_offset.y;
+                            // Привязка к сетке
+                            let raw_x = cp.x - self.drag_offset.x;
+                            let raw_y = cp.y - self.drag_offset.y;
+                            block.position.x = (raw_x / 10.0).round() * 10.0;
+                            block.position.y = (raw_y / 10.0).round() * 10.0;
                         }
                     }
                 }
 
-                if response.drag_stopped() {
+                // 4) Создание соединения — завершение при отпускании
+                if self.connecting_from.is_some() && response.drag_stopped() {
+                    if let Some(cp) = canvas_pos {
+                        // Проверяю, отпустил ли рядом с input dot какого-то блока
+                        for block in &self.blocks {
+                            let br = egui::Rect::from_min_size(block.position, egui::Vec2::new(220.0, 70.0));
+                            let in_dot = egui::Pos2::new(br.center().x, br.min.y);
+                            let from_id = self.connecting_from.unwrap();
+                            if in_dot.distance(egui::Pos2::new(cp.x, cp.y)) < 25.0 && block.id != from_id {
+                                // Проверяю, нет ли уже такого соединения
+                                let exists = self.connections.iter().any(|c| c.from_id == from_id && c.to_id == block.id);
+                                if !exists {
+                                    self.connections.push(Connection {
+                                        from_id,
+                                        to_id: block.id,
+                                    });
+                                    self.execution_log.push(format!("🔗 Соединение: #{} → #{}", from_id, block.id));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    self.connecting_from = None;
+                }
+
+                // 5) Pan canvas — только если не тащим блок и не создаём соединение
+                if response.dragged() && self.dragging_block_id.is_none() && self.connecting_from.is_none() {
+                    self.canvas_offset += response.drag_delta();
+                }
+
+                // 6) Отпускание перетаскивания блока
+                if response.drag_stopped() && self.connecting_from.is_none() {
                     self.dragging_block_id = None;
                 }
             });
@@ -770,6 +978,101 @@ impl eframe::App for RpaApp {
         self.draw_left_panel(ctx);
         self.draw_right_panel(ctx);
         self.draw_canvas(ctx);
+
+        // Обновляю позицию pointer при перетаскивании из палитры (глобально)
+        if self.drag_payload_block_type.is_some() {
+            let pointer_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+            if pointer_down {
+                if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) {
+                    self.drag_pointer_pos = pos;
+                }
+            }
+        }
+
+        // Floating preview блока из палитры
+        if let Some(ref block_type) = self.drag_payload_block_type {
+            let preview_pos = self.drag_pointer_pos;
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("drag_preview"),
+            ));
+            let w = 220.0;
+            let h = 70.0;
+            let rect = egui::Rect::from_min_size(
+                egui::Pos2::new(preview_pos.x - w / 2.0, preview_pos.y - h / 2.0),
+                egui::Vec2::new(w, h),
+            );
+            // Тень
+            painter.rect_filled(rect.expand(3.0), 6.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 50));
+            // Фон
+            painter.rect_filled(rect, 6.0, egui::Color32::WHITE);
+            // Бордер
+            painter.rect_stroke(rect, 6.0, egui::Stroke::new(2.0, block_type.accent_color()), egui::StrokeKind::Outside);
+            // Полоска
+            let strip = egui::Rect::from_min_max(
+                egui::Pos2::new(rect.min.x, rect.min.y),
+                egui::Pos2::new(rect.min.x + 4.0, rect.max.y),
+            );
+            painter.rect_filled(strip, 2.0, block_type.accent_color());
+            // Текст
+            let label = format!("{} {}", block_type.icon(), block_type.name());
+            painter.text(
+                egui::Pos2::new(rect.min.x + 14.0, rect.min.y + 28.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::new(12.0, egui::FontFamily::Proportional),
+                egui::Color32::from_rgb(40, 40, 40),
+            );
+            // Курсор
+            ctx.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+        }
+
+        // Drop блока из палитры — проверяю глобально при отпускании кнопки
+        if self.drag_payload_block_type.is_some() {
+            let just_released = ctx.input(|i| i.pointer.any_released());
+            if just_released {
+                if let Some(block_type) = self.drag_payload_block_type.take() {
+                    let pointer_pos = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(egui::Pos2::ZERO);
+                    // Проверяю, что pointer не над левой или правой панелью
+                    let left_panel_width = 220.0;
+                    let right_panel_width = 260.0;
+                    let screen_width = ctx.input(|i| i.screen_rect().width());
+                    let screen_height = ctx.input(|i| i.screen_rect().height());
+                    let in_canvas_x = pointer_pos.x > left_panel_width && pointer_pos.x < (screen_width - right_panel_width);
+                    let in_canvas_y = pointer_pos.y > 40.0 && pointer_pos.y < screen_height; // top_bar ~40px
+                    if in_canvas_x && in_canvas_y {
+                        // Добавляю блок в canvas
+                        let top_bar_height = 40.0;
+                        let canvas_pos = egui::Pos2::new(
+                            pointer_pos.x - left_panel_width - self.canvas_offset.x - 110.0,
+                            pointer_pos.y - top_bar_height - self.canvas_offset.y - 35.0,
+                        );
+                        let mut config = HashMap::new();
+                        match &block_type {
+                            BlockType::LaunchApp => {
+                                config.insert("app".to_string(), "notepad".to_string());
+                            }
+                            BlockType::Click => {
+                                config.insert("selector".to_string(), "classname=Edit".to_string());
+                            }
+                            BlockType::TypeText => {
+                                config.insert("selector".to_string(), "classname=Edit".to_string());
+                                config.insert("text".to_string(), "".to_string());
+                            }
+                        }
+                        let name = block_type.name();
+                        self.blocks.push(FlowBlock {
+                            id: self.next_block_id,
+                            block_type,
+                            position: canvas_pos,
+                            config,
+                        });
+                        self.next_block_id += 1;
+                        self.execution_log.push(format!("+ Добавлен: {}", name));
+                    }
+                }
+            }
+        }
 
         ctx.request_repaint();
     }
