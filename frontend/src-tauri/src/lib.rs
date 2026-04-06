@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::State;
-use uiautomation::UIAutomation;
 
 use ai_rpa::tool::ExecutionContext;
 use ai_rpa::tool_registry::ToolRegistry;
@@ -35,12 +34,24 @@ pub struct ExecutionResult {
 
 // ─── Tauri Commands ───────────────────────────────────────────
 
-#[tauri::command]
-fn execute_scenario(steps: Vec<ScenarioStep>, state: State<AppState>) -> Result<ExecutionResult, String> {
+fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
     EXECUTION_STOPPED.store(false, Ordering::SeqCst);
     let mut logs: Vec<String> = vec!["▶ Запуск сценария...".to_string()];
 
-    let automation = UIAutomation::new().map_err(|e| e.to_string())?;
+    // CoInitializeEx для STA — Tauri команды запускаются на MTA потоках,
+    // а UI Automation требует STA.
+    unsafe {
+        let hr = windows::Win32::System::Com::CoInitializeEx(
+            None,
+            windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+        );
+        // S_OK или S_FALSE (уже инициализировано) — оба OK
+        if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+            return Err(format!("CoInitializeEx failed: {hr:?}"));
+        }
+    }
+
+    let automation = uiautomation::UIAutomation::new().map_err(|e| e.to_string())?;
     let registry = ToolRegistry::new();
     let mut ctx = ExecutionContext::new();
 
@@ -122,15 +133,32 @@ fn execute_scenario(steps: Vec<ScenarioStep>, state: State<AppState>) -> Result<
         logs.push("✓ Сценарий завершён".to_string());
     }
 
-    // Подсветка последнего элемента (если есть лог)
-    // Это будет использовано для debug-режима
-
     let result = ExecutionResult {
         success: !logs.iter().any(|l| l.starts_with("❌")),
         log: logs.clone(),
     };
 
-    *state.logs.lock().unwrap() = logs;
+    // CoUninitialize — освобождаем COM на этом потоке
+    unsafe {
+        windows::Win32::System::Com::CoUninitialize();
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+fn execute_scenario(steps: Vec<ScenarioStep>, state: State<AppState>) -> Result<ExecutionResult, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<ExecutionResult, String>>();
+
+    std::thread::spawn(move || {
+        let result = run_scenario(steps);
+        let _ = tx.send(result);
+    });
+
+    let result = rx.recv().map_err(|_| "Execution thread panicked")??;
+
+    // Сохраняем логи в AppState
+    *state.logs.lock().unwrap() = result.log.clone();
 
     Ok(result)
 }
@@ -143,7 +171,7 @@ fn stop_execution() {
 #[tauri::command]
 fn highlight_element(selector: String) -> Result<(), String> {
     // Подсветка элемента через GDI overlay
-    let automation = UIAutomation::new().map_err(|e| e.to_string())?;
+    let automation = uiautomation::UIAutomation::new().map_err(|e| e.to_string())?;
     let root = automation.get_root_element().map_err(|e| e.to_string())?;
 
     if let Ok(sel) = parse_selector(&selector) {
