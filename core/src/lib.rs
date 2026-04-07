@@ -2,6 +2,7 @@
 
 pub mod tool;
 pub mod selector;
+pub mod resolve;
 pub mod click_tool;
 pub mod type_tool;
 pub mod close_tool;

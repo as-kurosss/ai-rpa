@@ -28,3 +28,7 @@ eframe = "0.31"
 [[test]]
 name = "test_type_tool"
 path = "tests/test_type_tool.rs"
+
+[[test]]
+name = "test_resolve"
+path = "tests/test_resolve.rs"
