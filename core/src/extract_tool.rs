@@ -57,7 +57,7 @@ impl Tool for ExtractTool {
         }
 
         ctx.variables.insert(self.var_name.clone(), json!(text));
-        ctx.log(format!("✅ Извлечён текст ({} символов) → {}", text.len(), self.var_name));
+        ctx.log(format!("✅ Извлечён текст ({} символов) → ${}", text.len(), self.var_name));
         ctx.log(format!("      📝 Значение: \"{}\"", text.chars().take(100).collect::<String>()));
 
         Ok(())

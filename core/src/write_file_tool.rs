@@ -2,7 +2,6 @@
 
 use crate::tool::{Tool, ExecutionContext};
 use anyhow::{anyhow, Result};
-use std::fs;
 
 /// Резолвит значение с поддержкой кавычек:
 /// - `var_name` — ищет переменную в контексте, если есть — возвращает значение, иначе — строку как есть
@@ -10,9 +9,9 @@ use std::fs;
 fn resolve_var(value: &str, ctx: &ExecutionContext) -> String {
     let trimmed = value.trim();
 
-    // Если в кавычках — это литерал
+    // Если в кавычках — это литерал (используем trim_matches для безопасности UTF-8)
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        return trimmed[1..trimmed.len() - 1].to_string();
+        return trimmed.trim_matches('"').to_string();
     }
 
     // Пробуем найти как переменную
@@ -54,10 +53,22 @@ impl Tool for WriteFileTool {
         let resolved_path = resolve_var(&self.file_path, ctx);
         let resolved_content = resolve_var(&self.content, ctx);
 
-        fs::write(&resolved_path, &resolved_content)
-            .map_err(|e| anyhow!("Не удалось записать '{}': {}", resolved_path, e))?;
+        if self.append {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&resolved_path)
+                .map_err(|e| anyhow!("Не удалось открыть '{}': {}", resolved_path, e))?;
+            file.write_all(resolved_content.as_bytes())
+                .map_err(|e| anyhow!("Не удалось записать '{}': {}", resolved_path, e))?;
+        } else {
+            std::fs::write(&resolved_path, &resolved_content)
+                .map_err(|e| anyhow!("Не удалось записать '{}': {}", resolved_path, e))?;
+        }
 
-        ctx.log(format!("📝 Файл записан: {} ({} байт)", resolved_path, resolved_content.len()));
+        ctx.log(format!("📝 Файл записан: {} ({} байт){}", resolved_path, resolved_content.len(),
+            if self.append { " (дописано)" } else { "" }));
         ctx.log(format!("      📝 Содержимое (первые 100 символов): \"{}\"",
             resolved_content.chars().take(100).collect::<String>()));
 

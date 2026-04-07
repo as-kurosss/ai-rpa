@@ -24,7 +24,7 @@ const nodeTypes: Record<string, any> = { block: BlockNode };
 
 const VALID_BLOCKS: BlockType[] = [
   'Start',
-  'LaunchApp', 'CloseApp', 'CallDiagram',
+  'LaunchApp', 'CloseApp',
   'Click', 'DoubleClick', 'RightClick', 'MoveMouse', 'DragAndDrop',
   'TypeText', 'KeyPress',
   'ExtractText', 'Screenshot',

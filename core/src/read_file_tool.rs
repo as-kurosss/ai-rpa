@@ -11,9 +11,9 @@ use std::fs;
 fn resolve_path(value: &str, ctx: &ExecutionContext) -> String {
     let trimmed = value.trim();
 
-    // Если в кавычках — литерал
+    // Если в кавычках — литерал (безопасно для UTF-8)
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        return trimmed[1..trimmed.len() - 1].to_string();
+        return trimmed.trim_matches('"').to_string();
     }
 
     // Пробуем как переменную

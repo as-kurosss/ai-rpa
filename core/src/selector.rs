@@ -151,11 +151,12 @@ impl Selector {
 }
 
 /// Находит root-элемент процесса по PID.
-/// Ищет среди элементов верхнего уровня первый элемент с нужным PID.
+/// Ищет первый элемент верхнего уровня с нужным PID.
 fn find_process_root(automation: &UIAutomation, pid: u32) -> Option<UIElement> {
     let root = automation.get_root_element().ok()?;
     automation.create_matcher()
         .from_ref(&root)
+        .depth(1)
         .timeout(2000)
         .filter_fn(Box::new(move |el: &UIElement| {
             match el.get_process_id() {

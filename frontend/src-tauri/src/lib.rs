@@ -69,19 +69,37 @@ fn list_projects() -> Result<Vec<ProjectInfo>, String> {
     Ok(projects)
 }
 
+/// Проверяет, что путь находится внутри указанной директории (защита от path traversal)
+fn validate_path_in_dir(base_dir: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    // canonicalize может не сработать для несуществующих файлов — используем fallback
+    let canon_base = base_dir.canonicalize()
+        .or_else(|e| Err(format!("Не удалось канонизировать директорию: {}", e)))?;
+    let canon_target = target.canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    if !canon_target.starts_with(&canon_base) {
+        return Err("Путь выходит за пределы директории проектов".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn save_project(project_json: serde_json::Value) -> Result<(), String> {
     let dir = ensure_projects_dir()?;
-    let name = project_json.get("name")
+    // Используем UUID для имени файла — избегаем коллизий и path traversal
+    let file_id = uuid::Uuid::new_v4().to_string();
+    let display_name = project_json.get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("project");
-    let safe_name: String = name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
-        .collect();
-    let file_name = format!("{}.json", safe_name);
+    // Сохраняем отображаемое имя в проекте
+    let project_with_id = {
+        let mut obj = project_json.as_object().cloned().unwrap_or_default();
+        obj.insert("id".to_string(), serde_json::Value::String(file_id.clone()));
+        serde_json::Value::Object(obj)
+    };
+    let file_name = format!("{}.json", file_name_safe(display_name));
     let path = dir.join(&file_name);
 
-    let content = serde_json::to_string_pretty(&project_json)
+    let content = serde_json::to_string_pretty(&project_with_id)
         .map_err(|e| format!("Ошибка сериализации: {}", e))?;
     std::fs::write(&path, content)
         .map_err(|e| format!("Не удалось сохранить проект: {}", e))?;
@@ -89,10 +107,17 @@ fn save_project(project_json: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+fn file_name_safe(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect()
+}
+
 #[tauri::command]
 fn load_project(file_name: &str) -> Result<serde_json::Value, String> {
     let dir = ensure_projects_dir()?;
     let path = dir.join(file_name);
+    validate_path_in_dir(&dir, &path)?;
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Не удалось прочитать '{}': {}", file_name, e))?;
     serde_json::from_str(&content)
@@ -103,21 +128,33 @@ fn load_project(file_name: &str) -> Result<serde_json::Value, String> {
 fn delete_project(file_name: &str) -> Result<(), String> {
     let dir = ensure_projects_dir()?;
     let path = dir.join(file_name);
+    validate_path_in_dir(&dir, &path)?;
     std::fs::remove_file(&path)
         .map_err(|e| format!("Не удалось удалить '{}': {}", file_name, e))
 }
 
 #[tauri::command]
 fn save_project_to_path(project_json: serde_json::Value, path: String) -> Result<(), String> {
+    let path_buf = std::path::PathBuf::from(&path);
+    // Проверяем, что путь не в системные директории
+    let path_str = path_buf.to_string_lossy();
+    if path_str.contains("..") {
+        return Err("Недопустимый путь".to_string());
+    }
     let content = serde_json::to_string_pretty(&project_json)
         .map_err(|e| format!("Ошибка сериализации: {}", e))?;
-    std::fs::write(&path, content)
+    std::fs::write(&path_buf, content)
         .map_err(|e| format!("Не удалось сохранить в '{}': {}", path, e))
 }
 
 #[tauri::command]
 fn load_project_from_path(file_path: &str) -> Result<serde_json::Value, String> {
-    let content = std::fs::read_to_string(file_path)
+    let path_buf = std::path::PathBuf::from(file_path);
+    let path_str = path_buf.to_string_lossy();
+    if path_str.contains("..") {
+        return Err("Недопустимый путь".to_string());
+    }
+    let content = std::fs::read_to_string(&path_buf)
         .map_err(|e| format!("Не удалось прочитать '{}': {}", file_path, e))?;
     serde_json::from_str(&content)
         .map_err(|e| format!("Ошибка парсинга проекта: {}", e))

@@ -96,12 +96,28 @@ export default function App() {
   const [savedProjects, setSavedProjects] = useState<ProjectInfo[]>([]);
 
   // Nodes/edges текущей активной диаграммы
-  const activeDiagram = project.diagrams.find(d => d.id === project.activeDiagramId)!;
+  const activeDiagram = project.diagrams.find(d => d.id === project.activeDiagramId) ?? project.diagrams[0];
   const [nodes, setNodes] = useState<Node[]>(() => activeDiagram.nodes.map(toReactFlowNode));
   const [edges, setEdges] = useState<Edge[]>(() => activeDiagram.edges.map(fromSerializedEdge));
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const isSwitchingDiagram = useRef(false);
+
+  // Debounced auto-save на диск (1 секунда после последнего изменения)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Очищаем предыдущий таймер
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = setTimeout(() => {
+      tauriSaveProject(project as unknown as Record<string, unknown>).catch(() => { /* ignore */ });
+    }, 1000);
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [project]);
 
   // Загрузка списка проектов при старте
   useEffect(() => {
@@ -109,8 +125,8 @@ export default function App() {
   }, []);
 
   // Синхронизация nodes/edges → project state при каждом изменении
+  // Не срабатывает при загрузке проекта из другой диаграммы (nodes/edges ещё не изменились)
   useEffect(() => {
-    if (isSwitchingDiagram.current) return; // Не перезаписываем при переключении диаграмм
     setProject(prev => ({
       ...prev,
       diagrams: prev.diagrams.map(d =>
@@ -121,10 +137,15 @@ export default function App() {
     }));
   }, [nodes, edges]);
 
-  // Сохранение на диск при изменении project
+  // Загрузка nodes/edges при смене активной диаграммы
   useEffect(() => {
-    tauriSaveProject(project as unknown as Record<string, unknown>).catch(() => { /* ignore */ });
-  }, [project]);
+    const target = project.diagrams.find(d => d.id === project.activeDiagramId);
+    if (target) {
+      setNodes(target.nodes.map(toReactFlowNode));
+      setEdges(target.edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+    }
+  }, [project.activeDiagramId]);
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -154,29 +175,20 @@ export default function App() {
   }, []);
 
   const handleSelectDiagram = useCallback((id: string) => {
-    isSwitchingDiagram.current = true;
-    setProject(prev => {
-      const target = prev.diagrams.find(d => d.id === id)!;
-      setNodes(target.nodes.map(toReactFlowNode));
-      setEdges(target.edges.map(fromSerializedEdge));
-      setSelectedNodeId(null);
-      // Reset flag after state updates
-      setTimeout(() => { isSwitchingDiagram.current = false; }, 0);
-      return { ...prev, activeDiagramId: id };
-    });
+    setProject(prev => ({ ...prev, activeDiagramId: id }));
   }, []);
 
   const handleAddDiagram = useCallback(() => {
-    const num = project.diagrams.length + 1;
-    const newDiagram = createDiagram(`Diagram${num}`);
     setProject(prev => {
+      const num = prev.diagrams.length + 1;
+      const newDiagram = createDiagram(`Diagram${num}`);
       const updated = { ...prev, diagrams: [...prev.diagrams, newDiagram], activeDiagramId: newDiagram.id };
       setNodes(newDiagram.nodes.map(toReactFlowNode));
       setEdges(newDiagram.edges.map(fromSerializedEdge));
       setSelectedNodeId(null);
       return updated;
     });
-  }, [project.diagrams.length]);
+  }, []);
 
   const handleNewProject = useCallback(() => {
     const name = prompt('Имя нового проекта:', 'Новый проект');

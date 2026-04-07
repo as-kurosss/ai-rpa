@@ -1,6 +1,6 @@
 export type BlockType =
   | 'Start'
-  | 'LaunchApp' | 'CloseApp' | 'CallDiagram'
+  | 'LaunchApp' | 'CloseApp'
   | 'Click' | 'DoubleClick' | 'RightClick' | 'MoveMouse' | 'DragAndDrop'
   | 'TypeText' | 'KeyPress'
   | 'ExtractText' | 'Screenshot'
@@ -63,7 +63,6 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   Start: 'Старт',
   LaunchApp: 'Запуск приложения',
   CloseApp: 'Закрытие приложения',
-  CallDiagram: 'Вызов диаграммы',
   Click: 'Клик',
   DoubleClick: 'Двойной клик',
   RightClick: 'Правый клик',
@@ -82,7 +81,7 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
 };
 
 export const BLOCK_ICONS: Record<BlockType, string> = {
-  Start: '▶️', LaunchApp: '🚀', CloseApp: '🛑', CallDiagram: '📋',
+  Start: '▶️', LaunchApp: '🚀', CloseApp: '🛑',
   Click: '🖱', DoubleClick: '🖱🖱', RightClick: '🖱R', MoveMouse: '🔹', DragAndDrop: '↔️',
   TypeText: '⌨', KeyPress: '⌨️',
   ExtractText: '📄', Screenshot: '📸',
@@ -91,7 +90,7 @@ export const BLOCK_ICONS: Record<BlockType, string> = {
 };
 
 export const BLOCK_ACCENT: Record<BlockType, string> = {
-  Start: '#4CAF50', LaunchApp: '#4CAF50', CloseApp: '#F44336', CallDiagram: '#673AB7',
+  Start: '#4CAF50', LaunchApp: '#4CAF50', CloseApp: '#F44336',
   Click: '#2196F3', DoubleClick: '#2196F3', RightClick: '#2196F3', MoveMouse: '#03A9F4', DragAndDrop: '#00BCD4',
   TypeText: '#FF9800', KeyPress: '#FF9800',
   ExtractText: '#9C27B0', Screenshot: '#673AB7',
@@ -109,7 +108,6 @@ export function createDefaultConfig(blockType: BlockType): BlockConfig {
     case 'Start': return {};
     case 'LaunchApp': return { app: 'notepad', var_name: '_last_pid' };
     case 'CloseApp': return { process_name: 'notepad', force: 'false', pid: '' };
-    case 'CallDiagram': return { diagram_id: '', pid: '' };
     case 'Click': return withPid({ selector: 'classname=Edit' });
     case 'DoubleClick': return withPid({ selector: 'classname=Edit' });
     case 'RightClick': return withPid({ selector: 'classname=Edit' });
@@ -133,7 +131,6 @@ export function blockTypeToToolName(blockType: BlockType): string {
     case 'Start': return 'Start';
     case 'LaunchApp': return 'LaunchApp';
     case 'CloseApp': return 'CloseApp';
-    case 'CallDiagram': return 'CallDiagram';
     case 'Click': return 'Click';
     case 'DoubleClick': return 'DoubleClick';
     case 'RightClick': return 'RightClick';
