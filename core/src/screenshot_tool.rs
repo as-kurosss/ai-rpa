@@ -11,11 +11,13 @@ pub struct ScreenshotTool {
     pub selector: Option<Selector>,
     /// Путь сохранения файла
     pub output_path: String,
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl ScreenshotTool {
-    pub fn new(selector: Option<Selector>, output_path: String) -> Self {
-        Self { selector, output_path }
+    pub fn new(selector: Option<Selector>, output_path: String, process_pid: Option<u32>) -> Self {
+        Self { selector, output_path, process_pid }
     }
 }
 
@@ -32,7 +34,7 @@ impl Tool for ScreenshotTool {
         let (x, y, w, h) = match &self.selector {
             Some(sel) => {
                 let root = automation.get_root_element()?;
-                let element = sel.find(automation, &root)?;
+                let element = sel.find_with_pid(automation, &root, self.process_pid)?;
                 let rect = element.get_bounding_rectangle()?;
                 (rect.get_left(), rect.get_top(), rect.get_width(), rect.get_height())
             }

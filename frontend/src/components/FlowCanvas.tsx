@@ -23,7 +23,8 @@ import { dragState } from './BlockPalette';
 const nodeTypes: Record<string, any> = { block: BlockNode };
 
 const VALID_BLOCKS: BlockType[] = [
-  'LaunchApp', 'CloseApp',
+  'Start',
+  'LaunchApp', 'CloseApp', 'CallDiagram',
   'Click', 'DoubleClick', 'RightClick', 'MoveMouse', 'DragAndDrop',
   'TypeText', 'KeyPress',
   'ExtractText', 'Screenshot',

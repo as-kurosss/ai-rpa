@@ -12,11 +12,13 @@ pub struct ConditionTool {
     pub selector: Selector,
     /// Имя переменной для сохранения результата (по умолчанию "condition_result")
     pub var_name: String,
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl ConditionTool {
-    pub fn new(selector: Selector, var_name: String) -> Self {
-        Self { selector, var_name }
+    pub fn new(selector: Selector, var_name: String, process_pid: Option<u32>) -> Self {
+        Self { selector, var_name, process_pid }
     }
 }
 
@@ -31,7 +33,7 @@ impl Tool for ConditionTool {
 
     fn execute(&self, automation: &UIAutomation, ctx: &mut ExecutionContext) -> Result<()> {
         let root = automation.get_root_element()?;
-        let exists = self.selector.find(automation, &root).is_ok();
+        let exists = self.selector.find_with_pid(automation, &root, self.process_pid).is_ok();
         ctx.variables.insert(self.var_name.clone(), json!(exists));
         ctx.log(format!("🔍 {}: {}", self.var_name, if exists { "true" } else { "false" }));
         Ok(())

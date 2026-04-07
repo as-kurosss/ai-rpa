@@ -13,6 +13,9 @@ pub struct TypeTool {
     /// Селектор для поиска элемента
     pub selector: Selector,
 
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
+
     /// Текст для ввода
     pub text: String,
 
@@ -22,9 +25,10 @@ pub struct TypeTool {
 
 impl TypeTool {
     /// Создает новый инструмент с селектором и текстом
-    pub fn new(selector: Selector, text: String) -> Self {
+    pub fn new(selector: Selector, text: String, process_pid: Option<u32>) -> Self {
         Self {
             selector,
+            process_pid,
             text,
             description: "Type text into UI element".to_string(),
         }
@@ -51,8 +55,8 @@ impl Tool for TypeTool {
         // 1. Получаем корневой элемент дерева UI (весь экран)
         let root = automation.get_root_element()?;
 
-        // 2. Ищем целевой элемент по селектору
-        let element = self.selector.find(automation, &root)?;
+        // 2. Ищем целевой элемент по селектору с учётом PID процесса
+        let element = self.selector.find_with_pid(automation, &root, self.process_pid)?;
 
         // 3. Кликаем по элементу для фокуса
         element.click()?;

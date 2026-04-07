@@ -1,6 +1,28 @@
 import { Node } from '@xyflow/react';
 import { BlockType, BLOCK_LABELS, BLOCK_ICONS } from '../types';
 
+const FIELD_LABELS: Record<string, string> = {
+  pid: '🎯 PID (число или имя переменной)',
+  selector: 'Селектор',
+  target_selector: 'Селектор цели',
+  text: 'Текст',
+  app: 'Приложение',
+  var_name: 'Имя переменной',
+  process_name: 'Имя процесса',
+  force: 'Принудительно',
+  keys: 'Клавиши',
+  delay_ms: 'Задержка (мс)',
+  timeout_ms: 'Таймаут (мс)',
+  interval_ms: 'Интервал (мс)',
+  max_attempts: 'Попытки',
+  duration_ms: 'Длительность (мс)',
+  file_path: 'Путь к файлу',
+  content: 'Содержимое',
+  append: 'Добавлять',
+  output_path: 'Путь сохранения',
+  diagram_id: 'ID диаграммы',
+};
+
 interface PropertiesPanelProps {
   selectedNode: Node | null;
   onUpdateNode: (nodeId: string, updates: { position?: { x: number; y: number }; data?: Record<string, unknown> }) => void;
@@ -86,28 +108,46 @@ export function PropertiesPanel({
         </div>
 
         {/* Config */}
-        {Object.entries(config).map(([key, value]) => (
-          <div key={key}>
-            <div className="text-[10px] text-gray-500 mb-1 capitalize">{key}:</div>
-            {key === 'text' ? (
-              <textarea
-                value={value}
-                onChange={e => handleConfigChange(key, e.target.value)}
-                rows={3}
-                className="w-full px-2 py-1 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]
-                           outline-none focus:border-[#4682b4] resize-none"
-              />
-            ) : (
-              <input
-                type="text"
-                value={value}
-                onChange={e => handleConfigChange(key, e.target.value)}
-                className="w-full px-2 py-1 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]
-                           outline-none focus:border-[#4682b4]"
-              />
-            )}
-          </div>
-        ))}
+        {Object.entries(config).map(([key, value]) => {
+          const label = FIELD_LABELS[key] || key;
+          const isPidField = key === 'pid';
+          const isFilePath = key === 'file_path';
+          const isContent = key === 'content';
+          const isTextarea = key === 'text' || key === 'content';
+          return (
+            <div key={key}>
+              <div className="text-[10px] text-gray-500 mb-1">{label}:</div>
+              {isPidField && (
+                <div className="text-[9px] text-gray-600 mb-0.5">Число (напр: 12345) или имя переменной (напр: my_pid)</div>
+              )}
+              {isFilePath && (
+                <div className="text-[9px] text-gray-600 mb-0.5">Текст в кавычках = путь, без кавычек = переменная</div>
+              )}
+              {isContent && (
+                <div className="text-[9px] text-gray-600 mb-0.5">Имя переменной = её значение, текст = как есть</div>
+              )}
+              {isTextarea ? (
+                <textarea
+                  value={value}
+                  onChange={e => handleConfigChange(key, e.target.value)}
+                  rows={3}
+                  placeholder={isContent ? 'extracted_text  или  "literal text"' : ''}
+                  className="w-full px-2 py-1 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]
+                             outline-none focus:border-[#4682b4] resize-none"
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={value}
+                  onChange={e => handleConfigChange(key, e.target.value)}
+                  placeholder={isPidField ? '12345 или my_pid' : isFilePath ? '"C:\\file.txt" или my_path' : ''}
+                  className="w-full px-2 py-1 text-xs bg-[#303030] text-gray-200 rounded border border-[#383838]
+                             outline-none focus:border-[#4682b4]"
+                />
+              )}
+            </div>
+          );
+        })}
 
         {/* Actions */}
         <div className="flex gap-2 pt-2">

@@ -13,11 +13,13 @@ pub struct DragDropTool {
     pub target: Selector,
     /// Задержка перед отпусканием (мс)
     pub delay_ms: u64,
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl DragDropTool {
-    pub fn new(source: Selector, target: Selector, delay_ms: u64) -> Self {
-        Self { source, target, delay_ms }
+    pub fn new(source: Selector, target: Selector, delay_ms: u64, process_pid: Option<u32>) -> Self {
+        Self { source, target, delay_ms, process_pid }
     }
 }
 
@@ -32,8 +34,8 @@ impl Tool for DragDropTool {
 
     fn execute(&self, automation: &UIAutomation, ctx: &mut ExecutionContext) -> Result<()> {
         let root = automation.get_root_element()?;
-        let src = self.source.find(automation, &root)?;
-        let tgt = self.target.find(automation, &root)?;
+        let src = self.source.find_with_pid(automation, &root, self.process_pid)?;
+        let tgt = self.target.find_with_pid(automation, &root, self.process_pid)?;
 
         let src_rect = src.get_bounding_rectangle()?;
         let tgt_rect = tgt.get_bounding_rectangle()?;

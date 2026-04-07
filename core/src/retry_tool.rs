@@ -11,11 +11,13 @@ pub struct RetryTool {
     pub selector: Selector,
     pub max_attempts: u32,
     pub delay_ms: u64,
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl RetryTool {
-    pub fn new(selector: Selector, max_attempts: u32, delay_ms: u64) -> Self {
-        Self { selector, max_attempts, delay_ms }
+    pub fn new(selector: Selector, max_attempts: u32, delay_ms: u64, process_pid: Option<u32>) -> Self {
+        Self { selector, max_attempts, delay_ms, process_pid }
     }
 }
 
@@ -32,7 +34,7 @@ impl Tool for RetryTool {
         let root = automation.get_root_element()?;
 
         for attempt in 1..=self.max_attempts {
-            match self.selector.find(automation, &root) {
+            match self.selector.find_with_pid(automation, &root, self.process_pid) {
                 Ok(element) => {
                     match element.click() {
                         Ok(()) => {

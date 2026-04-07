@@ -11,11 +11,13 @@ pub struct WaitForElementTool {
     pub selector: Selector,
     pub timeout_ms: u64,
     pub interval_ms: u64,
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl WaitForElementTool {
-    pub fn new(selector: Selector, timeout_ms: u64, interval_ms: u64) -> Self {
-        Self { selector, timeout_ms, interval_ms }
+    pub fn new(selector: Selector, timeout_ms: u64, interval_ms: u64, process_pid: Option<u32>) -> Self {
+        Self { selector, timeout_ms, interval_ms, process_pid }
     }
 }
 
@@ -39,7 +41,7 @@ impl Tool for WaitForElementTool {
                 return Err(anyhow!("Элемент не появился за {}ms: {:?}", self.timeout_ms, self.selector));
             }
 
-            if self.selector.find(automation, &root).is_ok() {
+            if self.selector.find_with_pid(automation, &root, self.process_pid).is_ok() {
                 ctx.log(format!("✅ Элемент появился за {}ms", start.elapsed().as_millis()));
                 return Ok(());
             }

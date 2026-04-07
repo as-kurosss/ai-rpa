@@ -18,6 +18,111 @@ pub struct AppState {
     pub logs: Mutex<Vec<String>>,
 }
 
+// ─── Project file system ──────────────────────────────────────
+
+fn get_projects_dir() -> std::path::PathBuf {
+    // Папка проектов рядом с приложением
+    let mut path = std::env::current_exe().unwrap_or_default();
+    path.pop(); // убираем имя exe
+    path.push("projects");
+    path
+}
+
+fn ensure_projects_dir() -> Result<std::path::PathBuf, String> {
+    let dir = get_projects_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку проектов: {}", e))?;
+    Ok(dir)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProjectInfo {
+    pub name: String,
+    pub file_name: String,
+}
+
+#[tauri::command]
+fn list_projects() -> Result<Vec<ProjectInfo>, String> {
+    let dir = ensure_projects_dir()?;
+    let mut projects = Vec::new();
+
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                if let Ok(project) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let name = project.get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Без имени")
+                        .to_string();
+                    projects.push(ProjectInfo {
+                        name,
+                        file_name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    projects.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(projects)
+}
+
+#[tauri::command]
+fn save_project(project_json: serde_json::Value) -> Result<(), String> {
+    let dir = ensure_projects_dir()?;
+    let name = project_json.get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("project");
+    let safe_name: String = name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    let file_name = format!("{}.json", safe_name);
+    let path = dir.join(&file_name);
+
+    let content = serde_json::to_string_pretty(&project_json)
+        .map_err(|e| format!("Ошибка сериализации: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Не удалось сохранить проект: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn load_project(file_name: &str) -> Result<serde_json::Value, String> {
+    let dir = ensure_projects_dir()?;
+    let path = dir.join(file_name);
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Не удалось прочитать '{}': {}", file_name, e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Ошибка парсинга проекта: {}", e))
+}
+
+#[tauri::command]
+fn delete_project(file_name: &str) -> Result<(), String> {
+    let dir = ensure_projects_dir()?;
+    let path = dir.join(file_name);
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("Не удалось удалить '{}': {}", file_name, e))
+}
+
+#[tauri::command]
+fn save_project_to_path(project_json: serde_json::Value, path: String) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(&project_json)
+        .map_err(|e| format!("Ошибка сериализации: {}", e))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Не удалось сохранить в '{}': {}", path, e))
+}
+
+#[tauri::command]
+fn load_project_from_path(file_path: &str) -> Result<serde_json::Value, String> {
+    let content = std::fs::read_to_string(file_path)
+        .map_err(|e| format!("Не удалось прочитать '{}': {}", file_path, e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Ошибка парсинга проекта: {}", e))
+}
+
 // ─── IPC types ────────────────────────────────────────────────
 
 #[derive(Deserialize, Clone)]
@@ -83,14 +188,24 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
 
         match step.step_type.as_str() {
             "LaunchApp" => {
-                let app_name = step.config.get("app").map(|s| s.as_str()).unwrap_or("notepad");
+                let app_raw = step.config.get("app").map(|s| s.as_str()).unwrap_or("notepad");
+                let var_name = step.config.get("var_name").cloned().unwrap_or_else(|| "_last_pid".to_string());
+
+                // Пробуем найти app_raw в переменных — если это переменная с путём
+                let app_name = ctx.variables.get(app_raw)
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| app_raw.to_string());
+
                 logs.push(format!("  [{step_num}] 🚀 Запуск: {}", app_name));
 
-                match find_executable(app_name) {
+                match find_executable(&app_name) {
                     Ok(app_path) => {
                         match launch_app_and_wait(&app_path, &[], 1000) {
                             Ok(pid) => {
-                                logs.push(format!("      ✓ PID: {}", pid));
+                                // Сохраняем PID в переменную контекста
+                                ctx.variables.insert(var_name.clone(), serde_json::json!(pid));
+                                logs.push(format!("      ✓ PID: {} (→ {})", pid, var_name));
                             }
                             Err(e) => {
                                 logs.push(format!("      ❌ {}", e));
@@ -107,12 +222,35 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 }
             }
             "CloseApp" => {
+                // Пробуем получить PID из config (pid может быть числом или именем переменной)
+                let process_pid = if let Some(pid_str) = step.config.get("pid") {
+                    // Пробуем как число
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        pid
+                    } else {
+                        // Ищем в переменных
+                        ctx.variables.get(pid_str)
+                            .and_then(|v| v.as_u64())
+                            .map(|p| p as u32)
+                            .unwrap_or(0)
+                    }
+                } else {
+                    0
+                };
+
                 let process_name = step.config.get("process_name").cloned().unwrap_or_default();
                 let force = step.config.get("force").map(|v| v == "true").unwrap_or(false);
-                logs.push(format!("  [{step_num}] 🛑 Закрытие: {}{}", process_name, if force { " (force)" } else { "" }));
+
+                let target_desc = if process_pid > 0 {
+                    format!("PID={}", process_pid)
+                } else {
+                    format!("{} (по имени)", process_name)
+                };
+                logs.push(format!("  [{step_num}] 🛑 Закрытие: {}{}", target_desc, if force { " (force)" } else { "" }));
 
                 let mut type_config = std::collections::HashMap::new();
                 type_config.insert("process_name".to_string(), process_name.clone());
+                type_config.insert("process_pid".to_string(), process_pid.to_string());
                 type_config.insert("force".to_string(), force.to_string());
                 match registry.execute_tool_with_config(
                     "CloseApp",
@@ -121,9 +259,19 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                     &automation,
                     &mut ctx,
                 ) {
-                    Ok(()) => { logs.push(format!("      ✓ '{}' закрыт", process_name)); }
+                    Ok(()) => {
+                        if process_pid > 0 {
+                            logs.push(format!("      ✓ PID={} закрыт", process_pid));
+                        } else {
+                            logs.push(format!("      ✓ '{}' закрыт", process_name));
+                        }
+                    }
                     Err(e) => { logs.push(format!("      ❌ {}", e)); }
                 }
+            }
+            "Start" => {
+                // Стартовый блок — ничего не делает
+                logs.push(format!("  [{step_num}] ▶️ Старт"));
             }
             _ => {
                 // Все остальные инструменты обрабатываются через registry
@@ -153,7 +301,9 @@ fn run_scenario(steps: Vec<ScenarioStep>) -> Result<ExecutionResult, String> {
                 let selector = if matches!(tool_name, "Click" | "Type" | "ExtractText" | "WaitForElement"
                     | "DoubleClick" | "RightClick" | "MoveMouse" | "DragAndDrop" | "Condition" | "Retry" | "Screenshot") {
                     let sel_str = step.config.get("selector").cloned().unwrap_or_default();
-                    match parse_selector(&sel_str) {
+                    // Резолвим process_id из переменных
+                    let vars = serde_json::to_value(&ctx.variables).ok();
+                    match parse_selector_with_vars(&sel_str, vars.as_ref()) {
                         Ok(s) => s,
                         Err(e) => {
                             logs.push(format!("  [{step_num}] ❌ {}", e));
@@ -273,6 +423,11 @@ fn highlight_element(selector: String) -> Result<(), String> {
 // ─── Helpers ──────────────────────────────────────────────────
 
 fn parse_selector(s: &str) -> Result<Selector, String> {
+    parse_selector_with_vars(s, None)
+}
+
+/// Парсит селектор, опционально резолвя PID из переменных
+fn parse_selector_with_vars(s: &str, variables: Option<&serde_json::Value>) -> Result<Selector, String> {
     if let Some(rest) = s.strip_prefix("classname=") {
         Ok(Selector::Classname(rest.to_string()))
     } else if let Some(rest) = s.strip_prefix("name=") {
@@ -281,6 +436,20 @@ fn parse_selector(s: &str) -> Result<Selector, String> {
         Ok(Selector::AutomationId(rest.to_string()))
     } else if let Some(rest) = s.strip_prefix("name_contains=") {
         Ok(Selector::NameContains(rest.to_string()))
+    } else if let Some(rest) = s.strip_prefix("process_id=") {
+        // Пробуем распарсить как число
+        if let Ok(pid) = rest.parse::<u32>() {
+            return Ok(Selector::ProcessId(pid));
+        }
+        // Если не число — ищем в переменных
+        if let Some(vars) = variables {
+            if let Some(val) = vars.get(rest) {
+                if let Some(pid) = val.as_u64() {
+                    return Ok(Selector::ProcessId(pid as u32));
+                }
+            }
+        }
+        Err(format!("process_id: '{}' — не число и не найдено в переменных", rest))
     } else {
         Err(format!("Неизвестный формат селектора: '{}'", s))
     }
@@ -291,6 +460,7 @@ fn parse_selector(s: &str) -> Result<Selector, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             logs: Mutex::new(Vec::new()),
         })
@@ -298,6 +468,12 @@ pub fn run() {
             execute_scenario,
             stop_execution,
             highlight_element,
+            list_projects,
+            save_project,
+            load_project,
+            delete_project,
+            save_project_to_path,
+            load_project_from_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri");

@@ -35,13 +35,15 @@ export const BlockNode = memo(({ data, selected }: BlockNodeProps) => {
         style={{ backgroundColor: accent }}
       />
 
-      {/* Input handle */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!w-3 !h-3 !bg-blue-500 !border-2 !border-white !-top-1.5"
-        id="input"
-      />
+      {/* Input handle — у Start нет входной точки */}
+      {blockType !== 'Start' && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!w-3 !h-3 !bg-blue-500 !border-2 !border-white !-top-1.5"
+          id="input"
+        />
+      )}
 
       {/* Output handle */}
       <Handle

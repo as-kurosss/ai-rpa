@@ -6,7 +6,8 @@ interface BlockPaletteProps {
 }
 
 const ALL_BLOCKS: BlockType[] = [
-  'LaunchApp', 'CloseApp',
+  'Start',
+  'LaunchApp', 'CloseApp', 'CallDiagram',
   'Click', 'DoubleClick', 'RightClick', 'MoveMouse', 'DragAndDrop',
   'TypeText', 'KeyPress',
   'ExtractText', 'Screenshot',

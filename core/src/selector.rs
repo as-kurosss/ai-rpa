@@ -28,12 +28,42 @@ pub enum Selector {
 
     /// Комбинация условий (ИЛИ)
     Or(Vec<Selector>),
+
+    /// Фильтрация по ProcessId — ограничивает поиск элементами конкретного процесса
+    /// Полезно при нескольких экземплярах одного приложения
+    ProcessId(u32),
 }
 
 impl Selector {
     /// Находит первый элемент, соответствующий селектору.
     /// Все варианты используют `find_first` с tree walker — O(depth) вместо O(n) full-tree scan.
     pub fn find(&self, automation: &UIAutomation, root: &UIElement) -> Result<UIElement, anyhow::Error> {
+        self.find_with_pid(automation, root, None)
+    }
+
+    /// Находит элемент с опциональной фильтрацией по PID процесса.
+    /// Если PID указан — сначала ищется root-элемент процесса, затем внутри него — по селектору.
+    pub fn find_with_pid(&self, automation: &UIAutomation, root: &UIElement, active_pid: Option<u32>) -> Result<UIElement, anyhow::Error> {
+        // Определяем корневой элемент для поиска
+        let search_root = if let Some(pid) = active_pid {
+            // Ищем root-элемент процесса по PID
+            match find_process_root(automation, pid) {
+                Some(proc_root) => proc_root,
+                None => {
+                    // Процесс не найден — fallback на общий root
+                    root.clone()
+                }
+            }
+        } else {
+            root.clone()
+        };
+
+        // Ищем по селектору внутри выбранного корня
+        self.find_inside(automation, &search_root)
+    }
+
+    /// Внутренний метод — поиск внутри конкретного root-элемента
+    fn find_inside(&self, automation: &UIAutomation, root: &UIElement) -> Result<UIElement, anyhow::Error> {
         match self {
             Selector::Classname(classname) => {
                 let element = automation.create_matcher()
@@ -99,6 +129,40 @@ impl Selector {
                 }
                 Err(anyhow!("Element not found: {:?}", selectors))
             }
+
+            Selector::ProcessId(pid) => {
+                // Фильтруем элементы по ProcessId
+                let target_pid = *pid;
+                let element = automation.create_matcher()
+                    .from_ref(root)
+                    .timeout(5000)
+                    .filter_fn(Box::new(move |el: &UIElement| {
+                        match el.get_process_id() {
+                            Ok(p) => Ok(p == target_pid),
+                            Err(_) => Ok(false),
+                        }
+                    }))
+                    .find_first()
+                    .map_err(|e| anyhow!("Element not found: process_id={}: {}", target_pid, e))?;
+                Ok(element)
+            }
         }
     }
+}
+
+/// Находит root-элемент процесса по PID.
+/// Ищет среди элементов верхнего уровня первый элемент с нужным PID.
+fn find_process_root(automation: &UIAutomation, pid: u32) -> Option<UIElement> {
+    let root = automation.get_root_element().ok()?;
+    automation.create_matcher()
+        .from_ref(&root)
+        .timeout(2000)
+        .filter_fn(Box::new(move |el: &UIElement| {
+            match el.get_process_id() {
+                Ok(p) => Ok(p == pid),
+                Err(_) => Ok(false),
+            }
+        }))
+        .find_first()
+        .ok()
 }

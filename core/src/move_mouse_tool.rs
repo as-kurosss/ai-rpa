@@ -7,26 +7,21 @@ use uiautomation::UIAutomation;
 
 pub struct MoveMouseTool {
     pub selector: Selector,
+    pub process_pid: Option<u32>,
 }
 
 impl MoveMouseTool {
-    pub fn new(selector: Selector) -> Self {
-        Self { selector }
+    pub fn new(selector: Selector, process_pid: Option<u32>) -> Self {
+        Self { selector, process_pid }
     }
 }
 
 impl Tool for MoveMouseTool {
-    fn name(&self) -> &str {
-        "MoveMouse"
-    }
-
-    fn description(&self) -> &str {
-        "Переместить курсор к элементу без клика"
-    }
-
+    fn name(&self) -> &str { "MoveMouse" }
+    fn description(&self) -> &str { "Переместить курсор к элементу без клика" }
     fn execute(&self, automation: &UIAutomation, ctx: &mut ExecutionContext) -> Result<()> {
         let root = automation.get_root_element()?;
-        let element = self.selector.find(automation, &root)?;
+        let element = self.selector.find_with_pid(automation, &root, self.process_pid)?;
         let point = element.get_clickable_point()?;
 
         if let Some(_pt) = point {

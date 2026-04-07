@@ -14,11 +14,14 @@ pub struct ExtractTool {
 
     /// Имя переменной для сохранения результата (по умолчанию "extracted_text")
     pub var_name: String,
+
+    /// PID процесса для ограничения поиска (None = весь экран)
+    pub process_pid: Option<u32>,
 }
 
 impl ExtractTool {
-    pub fn new(selector: Selector, var_name: String) -> Self {
-        Self { selector, var_name }
+    pub fn new(selector: Selector, var_name: String, process_pid: Option<u32>) -> Self {
+        Self { selector, var_name, process_pid }
     }
 }
 
@@ -32,22 +35,30 @@ impl Tool for ExtractTool {
     }
 
     fn execute(&self, automation: &UIAutomation, ctx: &mut ExecutionContext) -> Result<()> {
+        use uiautomation::patterns::UIValuePattern;
+
         let root = automation.get_root_element()?;
-        let element = self.selector.find(automation, &root)?;
+        let element = self.selector.find_with_pid(automation, &root, self.process_pid)?;
 
-        // Пробуем несколько источников текста:
-        // 1. Value Pattern (редактируемые поля)
-        // 2. Name (статический текст)
-        // 3. Text Pattern (документы, RichEdit)
+        // Извлекаем текст в правильном порядке приоритета:
+        // 1. Value Pattern — содержимое редактируемых полей (Edit, ComboBox)
+        // 2. Name — заголовок/имя элемента (кнопки, статический текст)
 
-        let text = element.get_name().unwrap_or_default();
+        let text = element
+            .get_pattern::<UIValuePattern>()
+            .ok()
+            .and_then(|vp| vp.get_value().ok())
+            .filter(|s| !s.is_empty())
+            .or_else(|| element.get_name().ok().filter(|s| !s.is_empty()))
+            .unwrap_or_default();
 
         if text.is_empty() {
             return Err(anyhow!("Элемент не содержит текста: {:?}", self.selector));
         }
 
         ctx.variables.insert(self.var_name.clone(), json!(text));
-        ctx.log(format!("✅ Извлечён текст ({} символов) → ${}", text.len(), self.var_name));
+        ctx.log(format!("✅ Извлечён текст ({} символов) → {}", text.len(), self.var_name));
+        ctx.log(format!("      📝 Значение: \"{}\"", text.chars().take(100).collect::<String>()));
 
         Ok(())
     }

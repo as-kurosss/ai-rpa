@@ -1,16 +1,15 @@
-import { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Node, Edge, OnNodesChange, OnEdgesChange, applyNodeChanges, applyEdgeChanges } from '@xyflow/react';
 import { TopBar } from './components/TopBar';
 import { BlockPalette } from './components/BlockPalette';
 import { FlowCanvas } from './components/FlowCanvas';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { LogPanel } from './components/LogPanel';
-import { BlockType } from './types';
-import { executeScenario, stopExecution, type ScenarioStep } from './tauri';
+import { DiagramTabBar } from './components/DiagramTabBar';
+import { Project, Diagram, SerializedNode, SerializedEdge, BlockType, createProject, createDiagram } from './types';
+import { executeScenario, stopExecution, type ScenarioStep, listProjects, saveProject as tauriSaveProject, loadProject as tauriLoadProject, deleteProject as tauriDeleteProject, type ProjectInfo, openProjectFile, loadProjectFromPath, saveProjectFile } from './tauri';
 
-/** Топологическая сортировка нод по рёбрам.
- *  Ноды без входящих рёбер идут первыми.
- *  Несвязанные ноды сортируются по Y. */
+/** Топологическая сортировка нод по рёбрам. */
 function topologicalSort(allNodes: Node[], allEdges: Edge[]): Node[] {
   const nodeMap = new Map(allNodes.map(n => [n.id, n]));
   const inDegree = new Map<string, number>();
@@ -28,9 +27,7 @@ function topologicalSort(allNodes: Node[], allEdges: Edge[]): Node[] {
     }
   }
 
-  // Kahn's algorithm
   const queue: string[] = [];
-  // Инициализируем очередь — ноды с inDegree=0, сортируем по Y для детерминизма
   const roots = allNodes
     .filter(n => (inDegree.get(n.id) || 0) === 0)
     .sort((a, b) => (a.position.y || 0) - (b.position.y || 0))
@@ -51,7 +48,6 @@ function topologicalSort(allNodes: Node[], allEdges: Edge[]): Node[] {
     }
   }
 
-  // Ноды, не достигнутые из roots (циклы или изолированные)
   const visited = new Set(result.map(n => n.id));
   const remaining = allNodes
     .filter(n => !visited.has(n.id))
@@ -61,43 +57,74 @@ function topologicalSort(allNodes: Node[], allEdges: Edge[]): Node[] {
   return result;
 }
 
-// Начальные демо-блоки
-function createInitialNodes(): Node[] {
-  return [
-    {
-      id: '1',
-      type: 'block',
-      position: { x: 100, y: 80 },
-      data: { blockType: 'LaunchApp' as BlockType, config: { app: 'notepad' } },
-    },
-    {
-      id: '2',
-      type: 'block',
-      position: { x: 100, y: 220 },
-      data: { blockType: 'Click' as BlockType, config: { selector: 'classname=Edit' } },
-    },
-    {
-      id: '3',
-      type: 'block',
-      position: { x: 100, y: 360 },
-      data: { blockType: 'TypeText' as BlockType, config: { selector: 'classname=Edit', text: 'Привет из RPA Studio!' } },
-    },
-  ];
+/** Convert SerializedNode → ReactFlow Node */
+function toReactFlowNode(sn: SerializedNode): Node {
+  return {
+    id: sn.id,
+    type: 'block',
+    position: sn.position,
+    data: { blockType: sn.blockType as BlockType, config: sn.config },
+  };
 }
 
-function createInitialEdges(): Edge[] {
-  return [
-    { id: 'e1-2', source: '1', target: '2', animated: true, style: { stroke: '#5a8cc8', strokeWidth: 2.5 } },
-    { id: 'e2-3', source: '2', target: '3', animated: true, style: { stroke: '#5a8cc8', strokeWidth: 2.5 } },
-  ];
+/** Convert ReactFlow Node → SerializedNode */
+function fromReactFlowNode(n: Node): SerializedNode {
+  return {
+    id: n.id,
+    blockType: (n.data as { blockType?: string }).blockType || 'unknown',
+    position: n.position,
+    config: Object.fromEntries(
+      Object.entries((n.data as { config?: Record<string, unknown> }).config || {}).map(([k, v]) => [k, String(v)])
+    ),
+  };
+}
+
+/** Convert Edge → SerializedEdge */
+function toSerializedEdge(e: Edge): SerializedEdge {
+  return { id: e.id, source: e.source, target: e.target };
+}
+
+/** Convert SerializedEdge → ReactFlow Edge */
+function fromSerializedEdge(se: SerializedEdge): Edge {
+  return { id: se.id, source: se.source, target: se.target, animated: true, style: { stroke: '#5a8cc8', strokeWidth: 2.5 } };
 }
 
 export default function App() {
-  const [nodes, setNodes] = useState<Node[]>(createInitialNodes);
-  const [edges, setEdges] = useState<Edge[]>(createInitialEdges);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [project, setProject] = useState<Project>(() => createProject('Мой проект'));
   const [isRunning, setIsRunning] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [savedProjects, setSavedProjects] = useState<ProjectInfo[]>([]);
+
+  // Nodes/edges текущей активной диаграммы
+  const activeDiagram = project.diagrams.find(d => d.id === project.activeDiagramId)!;
+  const [nodes, setNodes] = useState<Node[]>(() => activeDiagram.nodes.map(toReactFlowNode));
+  const [edges, setEdges] = useState<Edge[]>(() => activeDiagram.edges.map(fromSerializedEdge));
+
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const isSwitchingDiagram = useRef(false);
+
+  // Загрузка списка проектов при старте
+  useEffect(() => {
+    listProjects().then(setSavedProjects).catch(() => { /* ignore */ });
+  }, []);
+
+  // Синхронизация nodes/edges → project state при каждом изменении
+  useEffect(() => {
+    if (isSwitchingDiagram.current) return; // Не перезаписываем при переключении диаграмм
+    setProject(prev => ({
+      ...prev,
+      diagrams: prev.diagrams.map(d =>
+        d.id === prev.activeDiagramId
+          ? { ...d, nodes: nodes.map(fromReactFlowNode), edges: edges.map(toSerializedEdge) }
+          : d
+      ),
+    }));
+  }, [nodes, edges]);
+
+  // Сохранение на диск при изменении project
+  useEffect(() => {
+    tauriSaveProject(project as unknown as Record<string, unknown>).catch(() => { /* ignore */ });
+  }, [project]);
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -109,12 +136,7 @@ export default function App() {
   );
 
   const handleUpdateNode = useCallback((nodeId: string, updates: { position?: { x: number; y: number }; data?: Record<string, unknown> }) => {
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id !== nodeId) return n;
-        return { ...n, ...updates };
-      })
-    );
+    setNodes((nds) => nds.map((n) => (n.id !== nodeId ? n : { ...n, ...updates })));
   }, []);
 
   const handleDeleteNode = useCallback((nodeId: string) => {
@@ -127,12 +149,107 @@ export default function App() {
     setNodes((nds) => {
       const src = nds.find((n) => n.id === nodeId);
       if (!src) return nds;
-      return [
-        ...nds,
-        { ...src, id: crypto.randomUUID(), position: { x: src.position.x + 30, y: src.position.y + 30 }, data: { ...src.data } },
-      ];
+      return [...nds, { ...src, id: crypto.randomUUID(), position: { x: src.position.x + 30, y: src.position.y + 30 }, data: { ...src.data } }];
     });
   }, []);
+
+  const handleSelectDiagram = useCallback((id: string) => {
+    isSwitchingDiagram.current = true;
+    setProject(prev => {
+      const target = prev.diagrams.find(d => d.id === id)!;
+      setNodes(target.nodes.map(toReactFlowNode));
+      setEdges(target.edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+      // Reset flag after state updates
+      setTimeout(() => { isSwitchingDiagram.current = false; }, 0);
+      return { ...prev, activeDiagramId: id };
+    });
+  }, []);
+
+  const handleAddDiagram = useCallback(() => {
+    const num = project.diagrams.length + 1;
+    const newDiagram = createDiagram(`Diagram${num}`);
+    setProject(prev => {
+      const updated = { ...prev, diagrams: [...prev.diagrams, newDiagram], activeDiagramId: newDiagram.id };
+      setNodes(newDiagram.nodes.map(toReactFlowNode));
+      setEdges(newDiagram.edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+      return updated;
+    });
+  }, [project.diagrams.length]);
+
+  const handleNewProject = useCallback(() => {
+    const name = prompt('Имя нового проекта:', 'Новый проект');
+    if (name) {
+      const p = createProject(name);
+      setProject(p);
+      setNodes(p.diagrams[0].nodes.map(toReactFlowNode));
+      setEdges(p.diagrams[0].edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+      setLogs([]);
+      listProjects().then(setSavedProjects);
+    }
+  }, []);
+
+  const handleOpenFile = useCallback(async () => {
+    const filePath = await openProjectFile();
+    if (!filePath) return;
+    try {
+      const data = await loadProjectFromPath(filePath);
+      const proj = data as unknown as Project;
+      setProject(proj);
+      const active = proj.diagrams.find(d => d.id === proj.activeDiagramId) || proj.diagrams[0];
+      setNodes(active.nodes.map(toReactFlowNode));
+      setEdges(active.edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+      setLogs((prev) => [...prev, `📂 Проект "${proj.name}" загружен`]);
+      listProjects().then(setSavedProjects);
+    } catch (err) {
+      setLogs((prev) => [...prev, `❌ Не удалось прочитать файл: ${err}`]);
+    }
+  }, []);
+
+  const handleLoadProject = useCallback(async (fileInfo: ProjectInfo) => {
+    try {
+      const data = await tauriLoadProject(fileInfo.file_name);
+      const proj = data as unknown as Project;
+      setProject(proj);
+      const active = proj.diagrams.find(d => d.id === proj.activeDiagramId) || proj.diagrams[0];
+      setNodes(active.nodes.map(toReactFlowNode));
+      setEdges(active.edges.map(fromSerializedEdge));
+      setSelectedNodeId(null);
+      setLogs((prev) => [...prev, `📂 Проект "${proj.name}" загружен`]);
+    } catch {
+      setLogs((prev) => [...prev, '❌ Ошибка загрузки проекта']);
+    }
+  }, []);
+
+  const handleDeleteProject = useCallback(async (fileInfo: ProjectInfo) => {
+    if (!confirm(`Удалить проект "${fileInfo.name}"?`)) return;
+    try {
+      await tauriDeleteProject(fileInfo.file_name);
+      listProjects().then(setSavedProjects);
+      setLogs((prev) => [...prev, `🗑 Проект "${fileInfo.name}" удалён`]);
+    } catch {
+      setLogs((prev) => [...prev, '❌ Ошибка удаления проекта']);
+    }
+  }, []);
+
+  const handleSaveProject = useCallback(async () => {
+    const data = {
+      ...project,
+      diagrams: project.diagrams.map(d =>
+        d.id === project.activeDiagramId
+          ? { ...d, nodes: nodes.map(fromReactFlowNode), edges: edges.map(toSerializedEdge) }
+          : d
+      ),
+    };
+    const path = await saveProjectFile(data as unknown as Record<string, unknown>, project.name);
+    if (path) {
+      setLogs((prev) => [...prev, `💾 Проект сохранён: ${path}`]);
+      listProjects().then(setSavedProjects);
+    }
+  }, [project, nodes, edges]);
 
   const handleRun = useCallback(async () => {
     if (nodes.length === 0) {
@@ -140,19 +257,20 @@ export default function App() {
       return;
     }
 
+    const hasStart = nodes.some((n) => (n.data as { blockType?: string }).blockType === 'Start');
+    if (!hasStart) {
+      setLogs((prev) => [...prev, '❌ Ошибка: на диаграмме отсутствует блок «Старт». Добавьте блок «Старт» как точку входа.']);
+      return;
+    }
+
     setIsRunning(true);
     setLogs([]);
 
-    // Топологическая сортировка по рёбрам — порядок выполнения определяется графом.
-    // Фолбэк на Y-сортировку для несвязанных нод.
     const sorted = topologicalSort(nodes, edges);
-
     const steps: ScenarioStep[] = sorted.map((n) => ({
       type: (n.data as { blockType?: string }).blockType || 'unknown',
       config: Object.fromEntries(
-        Object.entries((n.data as { config?: Record<string, unknown> }).config || {}).map(
-          ([k, v]) => [k, String(v)]
-        )
+        Object.entries((n.data as { config?: Record<string, unknown> }).config || {}).map(([k, v]) => [k, String(v)])
       ),
     }));
 
@@ -168,60 +286,39 @@ export default function App() {
   }, [nodes, edges]);
 
   const handleStop = useCallback(async () => {
-    try {
-      await stopExecution();
-    } catch { /* ignore */ }
+    try { await stopExecution(); } catch { /* ignore */ }
     setIsRunning(false);
     setLogs((prev) => [...prev, '⏹ Сценарий остановлен']);
   }, []);
 
-  const handleSave = useCallback(() => {
-    const data = {
-      nodes: nodes.map((n) => ({
-        id: n.id,
-        blockType: (n.data as { blockType?: string }).blockType,
-        position: n.position,
-        config: (n.data as { config?: Record<string, string> }).config,
-      })),
-      edges: edges.map((e) => ({ from: e.source, to: e.target })),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'scenario.json';
-    a.click();
-    URL.revokeObjectURL(url);
-    setLogs((prev) => [...prev, '💾 Сохранено']);
-  }, [nodes, edges]);
+  const handleSave = useCallback(() => { handleSaveProject(); }, [handleSaveProject]);
 
-  const selectedNode = useMemo(
-    () => nodes.find((n) => n.id === selectedNodeId) || null,
-    [nodes, selectedNodeId]
-  );
+  const selectedNode = useMemo(() => nodes.find((n) => n.id === selectedNodeId) || null, [nodes, selectedNodeId]);
 
   return (
     <div className="flex flex-col h-screen bg-white">
-      <TopBar
-        blockCount={nodes.length}
-        isRunning={isRunning}
-        onRun={handleRun}
-        onStop={handleStop}
-        onSave={handleSave}
+      <TopBar blockCount={nodes.length} isRunning={isRunning} onRun={handleRun} onStop={handleStop} onSave={handleSave} />
+      <DiagramTabBar
+        project={project}
+        activeDiagramId={project.activeDiagramId}
+        savedProjects={savedProjects}
+        onSelectDiagram={handleSelectDiagram}
+        onAddDiagram={handleAddDiagram}
+        onOpenFile={handleOpenFile}
+        onLoadProject={handleLoadProject}
+        onDeleteProject={handleDeleteProject}
+        onNewProject={handleNewProject}
+        onSaveProject={handleSaveProject}
       />
       <div className="flex flex-1 overflow-hidden">
         <BlockPalette blockCount={nodes.length} />
         <div className="flex-1 flex flex-col">
           <div className="flex-1">
             <FlowCanvas
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              selectedNodeId={selectedNodeId}
-              setSelectedNodeId={setSelectedNodeId}
-              onSetNodes={(fn) => setNodes(fn)}
-              onSetEdges={(fn) => setEdges(fn)}
+              nodes={nodes} edges={edges}
+              onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+              selectedNodeId={selectedNodeId} setSelectedNodeId={setSelectedNodeId}
+              onSetNodes={(fn) => setNodes(fn)} onSetEdges={(fn) => setEdges(fn)}
             />
           </div>
           <LogPanel logs={logs} />
